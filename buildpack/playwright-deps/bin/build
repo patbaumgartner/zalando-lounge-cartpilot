@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# CNB bin/build – installs Playwright Chromium system dependencies into a
+# launch layer by downloading .deb packages and extracting them, exactly the
+# same set that was previously installed via apt-get in the Dockerfile.
+#
+# CNB call convention:
+#   $1  layers directory   (e.g. /layers)
+#   $2  platform directory (e.g. /platform)
+#   $3  plan path          (e.g. /tmp/plan.toml)
+set -euo pipefail
+
+LAYERS_DIR="$1"
+# $2 / $3 unused
+
+echo "=====> Playwright System Dependencies Buildpack"
+
+APT_LAYER="${LAYERS_DIR}/playwright-apt"
+
+# ── Cache hit: layer already populated from a previous build ────────────────
+if [[ -d "${APT_LAYER}/usr/lib" ]]; then
+    echo "-----> Reusing cached playwright-apt layer"
+    cat > "${APT_LAYER}.toml" <<TOML
+[types]
+launch = true
+build  = false
+cache  = true
+TOML
+    exit 0
+fi
+
+mkdir -p "${APT_LAYER}"
+
+cat > "${APT_LAYER}.toml" <<TOML
+[types]
+launch = true
+build  = false
+cache  = true
+TOML
+
+# ── APT working directories inside the layer (kept in cache) ────────────────
+APT_CACHE="${APT_LAYER}/apt-cache"
+APT_STATE="${APT_LAYER}/apt-state"
+mkdir -p "${APT_CACHE}/archives/partial"
+mkdir -p "${APT_STATE}/lists/partial"
+
+APT_OPTS=(
+    -o "debug::nolocking=true"
+    -o "dir::cache=${APT_CACHE}"
+    -o "dir::state=${APT_STATE}"
+)
+
+# ── Packages – identical to the Dockerfile apt-get install line ─────────────
+# (wget / ca-certificates are tools / certs already present in the Paketo run
+#  image and are not needed as runtime shared libraries for Chromium.)
+PACKAGES=(
+    libatk1.0-0
+    libatk-bridge2.0-0
+    libcups2
+    libdbus-1-3
+    libdrm2
+    libxkbcommon0
+    libxcomposite1
+    libxdamage1
+    libxfixes3
+    libxrandr2
+    libgbm1
+    libasound2
+    fonts-liberation
+    libnspr4
+    libnss3
+    libpango-1.0-0
+    libx11-xcb1
+    libxcb-dri3-0
+    libxss1
+    libxtst6
+)
+
+echo "-----> Updating apt package lists"
+apt-get "${APT_OPTS[@]}" -qq update
+
+echo "-----> Downloading Playwright system dependencies (no-install-recommends)"
+apt-get "${APT_OPTS[@]}" \
+    -y --no-install-recommends \
+    --allow-downgrades \
+    --allow-remove-essential \
+    --allow-change-held-packages \
+    install -d \
+    "${PACKAGES[@]}"
+
+echo "-----> Extracting packages into layer"
+find "${APT_CACHE}/archives" -name "*.deb" | while read -r deb; do
+    dpkg-deb -x "${deb}" "${APT_LAYER}"
+done
+
+# ── Runtime environment variables written to the layer ──────────────────────
+mkdir -p "${APT_LAYER}/env.launch"
+
+# Shared libraries – covers both amd64 and arm64 multiarch paths
+printf '%s' \
+    "${APT_LAYER}/usr/lib/x86_64-linux-gnu:" \
+    "${APT_LAYER}/usr/lib/aarch64-linux-gnu:" \
+    "${APT_LAYER}/usr/lib:" \
+    "${APT_LAYER}/lib/x86_64-linux-gnu:" \
+    "${APT_LAYER}/lib/aarch64-linux-gnu:" \
+    "${APT_LAYER}/lib" \
+    > "${APT_LAYER}/env.launch/LD_LIBRARY_PATH.prepend"
+printf '%s' ':' > "${APT_LAYER}/env.launch/LD_LIBRARY_PATH.delim"
+
+# Executables (e.g. any helper binaries pulled in transitively)
+printf '%s' "${APT_LAYER}/usr/bin:${APT_LAYER}/bin" \
+    > "${APT_LAYER}/env.launch/PATH.prepend"
+printf '%s' ':' > "${APT_LAYER}/env.launch/PATH.delim"
+
+# Font / XDG data dirs so Chromium can find fonts-liberation at runtime
+printf '%s' "${APT_LAYER}/usr/share" \
+    > "${APT_LAYER}/env.launch/XDG_DATA_DIRS.prepend"
+printf '%s' ':' > "${APT_LAYER}/env.launch/XDG_DATA_DIRS.delim"
+
+echo "=====> Playwright system dependencies installed successfully"

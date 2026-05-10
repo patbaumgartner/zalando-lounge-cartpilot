@@ -1,0 +1,45 @@
+services:
+
+  cartpilot:
+    build: .
+    container_name: cartpilot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cartpilot
+      SPRING_DATASOURCE_USERNAME: cartpilot
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      ZALANDO_EMAIL: ${ZALANDO_EMAIL}
+      ZALANDO_PASSWORD: ${ZALANDO_PASSWORD}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_GROUP_CHAT_ID: ${TELEGRAM_GROUP_CHAT_ID}
+      BRAND_ALIASES: ${BRAND_ALIASES:-}
+      MAX_KEEP_ALIVE_HOURS: ${MAX_KEEP_ALIVE_HOURS:-2}
+    volumes:
+      - playwright_cache:/root/.cache/ms-playwright
+      - session_data:/app/session
+    ports:
+      - "8080:8080"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cartpilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cartpilot
+      POSTGRES_USER: cartpilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cartpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  playwright_cache:
+  session_data:

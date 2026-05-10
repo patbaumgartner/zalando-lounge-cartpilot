@@ -1,0 +1,10 @@
+api = "0.7"
+
+[buildpack]
+id      = "com.patbaumgartner.playwright-deps"
+version = "1.0.0"
+name    = "Playwright System Dependencies"
+
+# Works with any Paketo/CNB stack (jammy, noble, …)
+[[stacks]]
+id = "*"

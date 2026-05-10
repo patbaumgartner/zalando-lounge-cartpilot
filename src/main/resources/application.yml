@@ -1,0 +1,61 @@
+spring:
+  profiles:
+    default: dev
+
+  application:
+    name: cartpilot
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cartpilot
+    username: cartpilot
+    password: ${POSTGRES_PASSWORD}
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  jackson:
+      deserialization:
+        fail-on-unknown-properties: false
+      datatype.datetime.write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+cartpilot:
+  zalando:
+    email: ${ZALANDO_EMAIL}
+    password: ${ZALANDO_PASSWORD}
+    session-file: ${SESSION_FILE:session/state.json}
+    base-url: https://www.zalando-lounge.ch
+    campaign-url: ${cartpilot.zalando.base-url}/event
+    retry-interval-seconds: 60
+    retry-max-attempts: 5
+
+  telegram:
+    bot-token: ${TELEGRAM_BOT_TOKEN}
+    group-chat-id: ${TELEGRAM_GROUP_CHAT_ID}
+    webhook-url: ${TELEGRAM_WEBHOOK_URL:}
+
+  cart:
+    expiry-minutes: 20
+    keep-alive-interval-minutes: 15
+    max-keep-alive-hours: ${MAX_KEEP_ALIVE_HOURS:2}
+
+  brand-aliases: ${BRAND_ALIASES:}
+
+  scheduler:
+    scan-cron: "0 0 6 * * *"
+    summary-cron: "0 10 6 * * *"
+    keep-alive-cron: "0 */15 * * * *"
+    timezone: Europe/Zurich
