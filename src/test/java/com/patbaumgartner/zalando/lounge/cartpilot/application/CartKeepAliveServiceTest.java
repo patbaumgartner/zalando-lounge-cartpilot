@@ -1,0 +1,108 @@
+package com.patbaumgartner.zalando.lounge.cartpilot.application;
+
+import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProductReservationPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ProductTestData;
+import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ReservationTestData;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
+import java.util.List;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+@DisplayName("CartKeepAliveService")
+class CartKeepAliveServiceTest {
+
+	@Mock
+	private ProductReservationPort reservationPort;
+
+	@Mock
+	private DiscoveredProductPort productPort;
+
+	@Mock
+	private BrowserPort browser;
+
+	@Mock
+	private NotificationPort notification;
+
+	private CartKeepAliveService keepAliveService;
+
+	@BeforeEach
+	void setUp() {
+		var props = buildProperties(2, 20);
+		keepAliveService = new CartKeepAliveService(reservationPort, productPort, browser, notification, props);
+	}
+
+	@Test
+	@DisplayName("does nothing when cart is empty")
+	void doesNothingWhenCartIsEmpty() {
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of());
+
+		keepAliveService.keepAlive();
+
+		verifyNoInteractions(browser, productPort);
+	}
+
+	@Test
+	@DisplayName("renews cart expiry when item is still in cart")
+	void renewsExpiryWhenItemStillInCart() {
+		var reservation = ReservationTestData.inCartReservation();
+		var product = ProductTestData.mammutJacket();
+
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
+		when(browser.isItemInCart(product.productUrl())).thenReturn(true);
+
+		keepAliveService.keepAlive();
+
+		assertThat(reservation.status()).isEqualTo(ReservationStatus.IN_CART);
+		verify(reservationPort).update(reservation);
+		verifyNoInteractions(notification);
+	}
+
+	@Test
+	@DisplayName("marks EXPIRED and notifies when item is no longer in cart")
+	void expiresWhenItemGoneFromCart() {
+		var reservation = ReservationTestData.inCartReservation();
+		var product = ProductTestData.mammutJacket();
+
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
+		when(browser.isItemInCart(product.productUrl())).thenReturn(false);
+
+		keepAliveService.keepAlive();
+
+		assertThat(reservation.status()).isEqualTo(ReservationStatus.EXPIRED);
+		verify(reservationPort).update(reservation);
+		verify(notification).sendGroupMessage(anyString());
+	}
+
+	// ── Helpers ────────────────────────────────────────────────
+
+	private CartPilotProperties buildProperties(int maxHours, int expiryMinutes) {
+		var cart = mock(CartPilotProperties.CartProperties.class);
+		when(cart.maxKeepAliveHours()).thenReturn(maxHours);
+		when(cart.expiryMinutes()).thenReturn(expiryMinutes);
+
+		var props = mock(CartPilotProperties.class);
+		when(props.cart()).thenReturn(cart);
+		return props;
+	}
+
+}

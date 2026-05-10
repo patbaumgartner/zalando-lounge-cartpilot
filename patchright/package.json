@@ -1,0 +1,14 @@
+{
+  "name": "cartpilot-patchright-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Patchright (undetected Playwright) browser server. Run via Docker or as a local Node sidecar; the Java app connects over the Playwright wire protocol.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "install-browser": "patchright install chromium"
+  },
+  "dependencies": {
+    "patchright": "1.60.0"
+  }
+}

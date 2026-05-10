@@ -1,0 +1,78 @@
+spring:
+  profiles:
+    default: dev
+
+  application:
+    name: cartpilot
+
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cartpilot
+    username: cartpilot
+    password: ${POSTGRES_PASSWORD}
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+    datatype:
+      datetime:
+        write-dates-as-timestamps: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+cartpilot:
+  zalando:
+    email: ${ZALANDO_EMAIL}
+    password: ${ZALANDO_PASSWORD}
+    session-file: ${SESSION_FILE:session/state.json}
+    base-url: https://www.zalando-lounge.ch
+    campaign-url: ${cartpilot.zalando.base-url}/event
+    retry-interval-seconds: 60
+    retry-max-attempts: 5
+    navigation-timeout-ms: 60000
+    element-timeout-ms: 30000
+    login-max-attempts: 3
+    headless: ${PLAYWRIGHT_HEADLESS:true}
+    headed-login-fallback-enabled: ${ZALANDO_HEADED_LOGIN_FALLBACK_ENABLED:false}
+    headed-login-timeout-ms: ${ZALANDO_HEADED_LOGIN_TIMEOUT_MS:240000}
+    network-diagnostics-enabled: ${ZALANDO_NETWORK_DIAGNOSTICS_ENABLED:false}
+    session-check-timeout-ms: ${ZALANDO_SESSION_CHECK_TIMEOUT_MS:12000}
+    login-navigation-timeout-ms: ${ZALANDO_LOGIN_NAVIGATION_TIMEOUT_MS:60000}
+    login-post-submit-timeout-ms: ${ZALANDO_LOGIN_POST_SUBMIT_TIMEOUT_MS:30000}
+    auth-retry-base-delay-ms: ${ZALANDO_AUTH_RETRY_BASE_DELAY_MS:1000}
+    auth-context-reset-retries: ${ZALANDO_AUTH_CONTEXT_RESET_RETRIES:1}
+    trust-session-file-in-dev: ${ZALANDO_TRUST_SESSION_FILE_IN_DEV:false}
+    diagnostics-dir: ${ZALANDO_DIAGNOSTICS_DIR:diagnostics/auth}
+    # Patchright (undetected Chromium) runs as a separate browser server; the Java
+    # client connects to it over the Playwright wire protocol. In docker-compose
+    # this is the "patchright" service.
+    browser-ws-endpoint: ${ZALANDO_BROWSER_WS_ENDPOINT:ws://patchright:3000/cartpilot}
+
+  telegram:
+    bot-token: ${TELEGRAM_BOT_TOKEN}
+    group-chat-id: ${TELEGRAM_GROUP_CHAT_ID}
+
+  cart:
+    expiry-minutes: 20
+    keep-alive-interval-minutes: 15
+    max-keep-alive-hours: ${MAX_KEEP_ALIVE_HOURS:2}
+
+  scheduler:
+    scan-cron: "0 0 6 * * *"
+    summary-cron: "0 10 6 * * *"
+    keep-alive-cron: "0 */15 * * * *"
+    timezone: Europe/Zurich
