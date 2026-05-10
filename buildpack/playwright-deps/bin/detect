@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Always participate – every Spring Boot image needs Playwright system deps.
+echo "playwright-deps"
+exit 0

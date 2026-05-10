@@ -1,0 +1,29 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:cartpilot;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  config:
+    import:
+      - "optional:file:../.env[.properties]"
+      - "optional:file:.env[.properties]"
+
+  flyway:
+    enabled: true
+
+  sql:
+    init:
+      platform: h2
+
+logging:
+  level:
+    com.patbaumgartner.zalando.lounge.cartpilot: DEBUG
+    org.springframework.jdbc: DEBUG
+
+cartpilot:
+  zalando:
+    login-max-attempts: 1
+    headed-login-fallback-enabled: true
+    headed-login-timeout-ms: 1800000
+    trust-session-file-in-dev: true

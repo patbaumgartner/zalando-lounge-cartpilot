@@ -1,0 +1,8 @@
+   ______           __  ____  _ __      __ 
+  / ____/___ ______/ /_/ __ \(_) /___  / /_
+ / /   / __ `/ ___/ __/ /_/ / / / __ \/ __/
+/ /___/ /_/ / /  / /_/ ____/ / / /_/ / /_  
+\____/\__,_/_/   \__/_/   /_/_/\____/\__/  
+
+:: CartPilot :: Zalando Lounge Assistant
+:: Spring Boot ${spring-boot.version} | Profile: ${spring.profiles.active:default}
