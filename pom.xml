@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.0</version>
+    <relativePath></relativePath>
+  </parent>
+
+  <groupId>com.patbaumgartner</groupId>
+  <artifactId>zalando-lounge-cartpilot</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>Zalando Lounge CartPilot</name>
+  <description>Headless Zalando Lounge CH monitor with Telegram group integration</description>
+
+  <properties>
+    <archunit.version>1.4.2</archunit.version>
+    <java.version>25</java.version>
+    <playwright.version>1.60.0</playwright.version>
+    <taikai.version>1.64.0</taikai.version>
+    <telegrambots.version>10.0.0</telegrambots.version>
+  </properties>
+
+  <dependencies>
+
+    <!-- ── Spring Boot ─────────────────────────────────────────── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+
+    <!-- ── Database ────────────────────────────────────────────── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- ── Browser Automation ──────────────────────────────────── -->
+    <dependency>
+      <groupId>com.microsoft.playwright</groupId>
+      <artifactId>playwright</artifactId>
+      <version>${playwright.version}</version>
+    </dependency>
+
+    <!-- ── Web (explicit; was transitive from webhook-starter) ─── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc</artifactId>
+    </dependency>
+
+    <!-- ── Telegram Bot ─────────────────────────────────────────── -->
+    <dependency>
+      <groupId>org.telegram</groupId>
+      <artifactId>telegrambots-springboot-longpolling-starter</artifactId>
+      <version>${telegrambots.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.telegram</groupId>
+      <artifactId>telegrambots-client</artifactId>
+      <version>${telegrambots.version}</version>
+    </dependency>
+
+    <!-- ── JSON ────────────────────────────────────────────────── -->
+    <dependency>
+      <groupId>tools.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <!-- ── Testing ─────────────────────────────────────────────── -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jdbc-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <version>${archunit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.enofex</groupId>
+      <artifactId>taikai</artifactId>
+      <version>${taikai.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Configure git to use the tracked .githooks directory -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.3</version>
+        <executions>
+          <execution>
+            <id>git-hooks-path</id>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <phase>initialize</phase>
+            <configuration>
+              <executable>git</executable>
+              <arguments>
+                <argument>config</argument>
+                <argument>core.hooksPath</argument>
+                <argument>.githooks</argument>
+              </arguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-autoconfigure-processor</artifactId>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <image>
+            <env>
+              <SPRING_PROFILES_ACTIVE>prod</SPRING_PROFILES_ACTIVE>
+            </env>
+          </image>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

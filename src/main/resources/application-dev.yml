@@ -1,0 +1,34 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./target/cartpilot-dev;MODE=PostgreSQL;AUTO_SERVER=TRUE;NON_KEYWORDS=VALUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  config:
+    import:
+      - "optional:file:../.env[.properties]"
+      - "optional:file:.env[.properties]"
+
+  flyway:
+    enabled: true
+
+  sql:
+    init:
+      platform: h2
+
+logging:
+  level:
+    com.patbaumgartner.zalando.lounge.cartpilot: DEBUG
+    org.springframework.jdbc: DEBUG
+
+cartpilot:
+  zalando:
+    login-max-attempts: 1
+    headed-login-fallback-enabled: true
+    headed-login-timeout-ms: 1800000
+    trust-session-file-in-dev: true
+    # Connect to the Patchright container published on the host (docker compose up patchright).
+    browser-ws-endpoint: ${ZALANDO_BROWSER_WS_ENDPOINT:ws://localhost:3000/cartpilot}
+  scheduler:
+    scan-cron: "-"
+    summary-cron: "-"

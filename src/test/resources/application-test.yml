@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:cartpilot-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  flyway:
+    enabled: true
+
+logging:
+  level:
+    com.patbaumgartner.zalando.lounge.cartpilot.adapter.in.telegram.TelegramBotHandler: OFF
+
+cartpilot:
+  zalando:
+    email: test@example.com
+    password: test
+    session-file: /tmp/test-session.json
+    base-url: https://www.zalando-lounge.ch
+    campaign-url: https://www.zalando-lounge.ch/event
+    retry-interval-seconds: 1
+    retry-max-attempts: 2
+  telegram:
+    bot-token: test-token
+    group-chat-id: "-1001234567890"
+  cart:
+    expiry-minutes: 20
+    keep-alive-interval-minutes: 15
+    max-keep-alive-hours: 2
+  scheduler:
+    scan-cron: "0 0 6 * * *"
+    summary-cron: "0 10 6 * * *"
+    keep-alive-cron: "0 */15 * * * *"
+    timezone: Europe/Zurich
