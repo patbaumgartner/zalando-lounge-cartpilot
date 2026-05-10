@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml" />
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml" />
+
+    <logger
+        name="com.patbaumgartner.zalando.lounge.cartpilot.adapter.in.telegram.TelegramBotHandler"
+        level="OFF" />
+    <logger
+        name="com.patbaumgartner.zalando.lounge.cartpilot.application.CampaignScannerService"
+        level="OFF" />
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration>
