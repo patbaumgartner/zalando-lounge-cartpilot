@@ -132,14 +132,19 @@ public class CampaignScannerService {
 	// ── Private helpers ────────────────────────────────────────
 
 	private boolean ensureAuthenticatedWithRetry() {
-		for (int attempt = 1; attempt <= 2; attempt++) {
+		final int maxAttempts = 2;
+		int remainingAttempts = maxAttempts;
+
+		while (remainingAttempts > 0) {
 			try {
 				browser.ensureAuthenticated();
 				return true;
 			}
 			catch (Exception e) {
+				int attempt = maxAttempts - remainingAttempts + 1;
 				log.warn("Authentication attempt {}/2 failed: {}", attempt, e.getMessage());
-				if (attempt == 2) {
+				remainingAttempts--;
+				if (remainingAttempts == 0) {
 					log.error("Authentication failed after retry", e);
 					return false;
 				}
