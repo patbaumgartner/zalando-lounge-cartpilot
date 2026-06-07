@@ -132,32 +132,31 @@ public class CampaignScannerService {
 	// ── Private helpers ────────────────────────────────────────
 
 	private boolean ensureAuthenticatedWithRetry() {
-		final int maxAttempts = 2;
-		int remainingAttempts = maxAttempts;
-
-		while (remainingAttempts > 0) {
-			try {
-				browser.ensureAuthenticated();
-				return true;
-			}
-			catch (Exception e) {
-				int attempt = maxAttempts - remainingAttempts + 1;
-				log.warn("Authentication attempt {}/2 failed: {}", attempt, e.getMessage());
-				remainingAttempts--;
-				if (remainingAttempts == 0) {
-					log.error("Authentication failed after retry", e);
-					return false;
-				}
-				try {
-					Thread.sleep(2_000L);
-				}
-				catch (InterruptedException interruptedException) {
-					Thread.currentThread().interrupt();
-					return false;
-				}
-			}
+		try {
+			browser.ensureAuthenticated();
+			return true;
 		}
-		return false;
+		catch (Exception firstAttemptFailure) {
+			log.warn("Authentication attempt 1/2 failed: {}", firstAttemptFailure.getMessage());
+		}
+
+		try {
+			Thread.sleep(2_000L);
+		}
+		catch (InterruptedException interruptedException) {
+			Thread.currentThread().interrupt();
+			return false;
+		}
+
+		try {
+			browser.ensureAuthenticated();
+			return true;
+		}
+		catch (Exception secondAttemptFailure) {
+			log.warn("Authentication attempt 2/2 failed: {}", secondAttemptFailure.getMessage());
+			log.error("Authentication failed after retry", secondAttemptFailure);
+			return false;
+		}
 	}
 
 	private List<Campaign> fetchWithRetry() {
