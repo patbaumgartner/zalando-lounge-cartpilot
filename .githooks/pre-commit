@@ -5,10 +5,8 @@ echo "▶ Applying Spring Java Format..."
 mvn -q io.spring.javaformat:spring-javaformat-maven-plugin:apply
 
 echo "▶ Sorting pom.xml..."
-mvn -q com.github.ekryd.sortpom:sortpom-maven-plugin:sort \
-  -Dsort.predefinedSortOrder=custom_1 \
-  -Dsort.createBackupFile=false \
-  -Dsort.sortProperties=true
+# Use the sortpom configuration declared in pom.xml (single source of truth).
+mvn -q sortpom:sort
 
 echo "▶ Running Taikai architecture checks..."
 mvn -q test -Dtest=TaikaiTest -DfailIfNoTests=false
