@@ -37,3 +37,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# sortpom backup
+pom.xml.bak

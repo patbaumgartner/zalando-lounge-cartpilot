@@ -21,8 +21,20 @@
     <archunit.version>1.4.2</archunit.version>
     <java.version>25</java.version>
     <playwright.version>1.60.0</playwright.version>
+    <spring-javaformat.version>0.0.47</spring-javaformat.version>
     <taikai.version>1.64.0</taikai.version>
     <telegrambots.version>10.0.0</telegrambots.version>
+
+    <!-- Code Quality & Coverage Plugins -->
+    <jacoco.version>0.8.15</jacoco.version>
+    <sortpom-maven-plugin.version>4.0.0</sortpom-maven-plugin.version>
+
+    <!-- OpenRewrite Plugins -->
+    <rewrite-logging-frameworks.version>3.29.2</rewrite-logging-frameworks.version>
+    <rewrite-maven-plugin.version>6.43.0</rewrite-maven-plugin.version>
+    <rewrite-spring.version>6.34.0</rewrite-spring.version>
+    <rewrite-static-analysis.version>2.38.0</rewrite-static-analysis.version>
+    <rewrite-testing-frameworks.version>3.41.0</rewrite-testing-frameworks.version>
   </properties>
 
   <dependencies>
@@ -45,16 +57,6 @@
     <dependency>
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.h2database</groupId>
-      <artifactId>h2</artifactId>
-      <scope>runtime</scope>
     </dependency>
 
     <!-- ── Browser Automation ──────────────────────────────────── -->
@@ -86,6 +88,16 @@
     <dependency>
       <groupId>tools.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <scope>runtime</scope>
     </dependency>
 
     <!-- ── Testing ─────────────────────────────────────────────── -->
@@ -149,6 +161,26 @@
           </execution>
         </executions>
       </plugin>
+      <!-- Git Information -->
+      <plugin>
+        <groupId>io.github.git-commit-id</groupId>
+        <artifactId>git-commit-id-maven-plugin</artifactId>
+      </plugin>
+      <!-- Code Formatting -->
+      <plugin>
+        <groupId>io.spring.javaformat</groupId>
+        <artifactId>spring-javaformat-maven-plugin</artifactId>
+        <version>${spring-javaformat.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>validate</goal>
+            </goals>
+            <phase>validate</phase>
+            <inherited>true</inherited>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -160,6 +192,84 @@
             </path>
           </annotationProcessorPaths>
         </configuration>
+      </plugin>
+      <!-- Code Coverage -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <goals>
+              <goal>report</goal>
+            </goals>
+            <phase>verify</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Code Modernization and Refactoring -->
+      <plugin>
+        <groupId>org.openrewrite.maven</groupId>
+        <artifactId>rewrite-maven-plugin</artifactId>
+        <version>${rewrite-maven-plugin.version}</version>
+        <configuration>
+          <activeRecipes>
+            <recipe>org.openrewrite.staticanalysis.CodeCleanup</recipe>
+            <recipe>org.openrewrite.java.logging.slf4j.Slf4jBestPractices</recipe>
+            <recipe>org.openrewrite.java.testing.junit5.JUnit5BestPractices</recipe>
+            <recipe>org.openrewrite.java.spring.boot4.UpgradeSpringBoot_4_0</recipe>
+          </activeRecipes>
+        </configuration>
+        <dependencies>
+          <dependency>
+            <groupId>org.openrewrite.recipe</groupId>
+            <artifactId>rewrite-spring</artifactId>
+            <version>${rewrite-spring.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.openrewrite.recipe</groupId>
+            <artifactId>rewrite-static-analysis</artifactId>
+            <version>${rewrite-static-analysis.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.openrewrite.recipe</groupId>
+            <artifactId>rewrite-logging-frameworks</artifactId>
+            <version>${rewrite-logging-frameworks.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.openrewrite.recipe</groupId>
+            <artifactId>rewrite-testing-frameworks</artifactId>
+            <version>${rewrite-testing-frameworks.version}</version>
+          </dependency>
+        </dependencies>
+      </plugin>
+      <!-- POM Organization -->
+      <plugin>
+        <groupId>com.github.ekryd.sortpom</groupId>
+        <artifactId>sortpom-maven-plugin</artifactId>
+        <version>${sortpom-maven-plugin.version}</version>
+        <configuration>
+          <predefinedSortOrder>custom_1</predefinedSortOrder>
+          <lineSeparator>\n</lineSeparator>
+          <encoding>${project.build.sourceEncoding}</encoding>
+          <sortProperties>false</sortProperties>
+          <keepBlankLines>true</keepBlankLines>
+          <sortDependencies>scope</sortDependencies>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>sort</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
@@ -174,5 +284,66 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!--
+      GraalVM native image (activate with -Pnative). The base `native` profile is
+      inherited from spring-boot-starter-parent; this override targets the NAS CPU
+      baseline (Intel J3455 supports x86-64-v2) and pins AOT processing so the build
+      does not reach Postgres, Telegram or the browser server.
+
+      Local native binary:     ./mvnw -Pnative native:compile
+      Native container image:   ./mvnw -Pnative spring-boot:build-image
+    -->
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+            <configuration>
+              <buildArgs>
+                <!-- Target the NAS CPU baseline (Intel J3455 supports x86-64-v2). -->
+                <buildArg>-march=x86-64-v2</buildArg>
+              </buildArgs>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-maven-plugin</artifactId>
+            <configuration>
+              <image>
+                <env>
+                  <!-- Force a native image build inside the buildpack. -->
+                  <BP_NATIVE_IMAGE>true</BP_NATIVE_IMAGE>
+                  <!-- Emit x86-64-v2 instructions so the image runs on the NAS (Intel J3455). -->
+                  <BP_NATIVE_IMAGE_BUILD_ARGUMENTS>-march=x86-64-v2</BP_NATIVE_IMAGE_BUILD_ARGUMENTS>
+                </env>
+              </image>
+            </configuration>
+            <executions>
+              <!--
+                Spring evaluates @ConditionalOnProperty at AOT (build) time. Provide a
+                dummy bot-token so the Telegram bot is retained in the native image, and
+                point the datasource at in-memory H2 with Flyway disabled so AOT
+                processing does not try to reach Postgres.
+              -->
+              <execution>
+                <id>process-aot</id>
+                <configuration>
+                  <jvmArguments>-Dcartpilot.telegram.bot-token=aot-build
+                    -Dspring.flyway.enabled=false
+                    -Dspring.datasource.url=jdbc:h2:mem:aot;DB_CLOSE_DELAY=-1
+                    -Dspring.datasource.driver-class-name=org.h2.Driver
+                    -Dspring.datasource.username=sa -Dspring.datasource.password=</jvmArguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
 </project>
