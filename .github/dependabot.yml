@@ -1,62 +1,56 @@
 version: 2
 updates:
-
-  # ── Maven ──────────────────────────────────────────────────────────────────
-  - package-ecosystem: "maven"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Europe/Zurich"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "patbaumgartner"
-    assignees:
-      - "patbaumgartner"
-    commit-message:
-      prefix: "deps(java)"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "java"
-
-  # ── npm / Node (patchright/) ───────────────────────────────────────────────
-  - package-ecosystem: "npm"
-    directory: "/patchright"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Europe/Zurich"
-    open-pull-requests-limit: 10
-    reviewers:
-      - "patbaumgartner"
-    assignees:
-      - "patbaumgartner"
-    commit-message:
-      prefix: "deps(node)"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "node"
-
-  # ── GitHub Actions ─────────────────────────────────────────────────────────
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Europe/Zurich"
-    open-pull-requests-limit: 5
-    reviewers:
-      - "patbaumgartner"
-    assignees:
-      - "patbaumgartner"
-    commit-message:
-      prefix: "ci"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "github-actions"
+- package-ecosystem: maven
+  directory: /
+  schedule:
+    interval: weekly
+    day: monday
+    time: 06:00
+    timezone: Europe/Zurich
+  open-pull-requests-limit: 10
+  reviewers:
+  - patbaumgartner
+  assignees:
+  - patbaumgartner
+  commit-message:
+    prefix: deps(java)
+    include: scope
+  labels:
+  - dependencies
+  - java
+- package-ecosystem: npm
+  directory: /patchright
+  schedule:
+    interval: weekly
+    day: monday
+    time: 06:00
+    timezone: Europe/Zurich
+  open-pull-requests-limit: 10
+  reviewers:
+  - patbaumgartner
+  assignees:
+  - patbaumgartner
+  commit-message:
+    prefix: deps(node)
+    include: scope
+  labels:
+  - dependencies
+  - node
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: weekly
+    day: monday
+    time: 06:00
+    timezone: Europe/Zurich
+  open-pull-requests-limit: 5
+  reviewers:
+  - patbaumgartner
+  assignees:
+  - patbaumgartner
+  commit-message:
+    prefix: ci
+    include: scope
+  labels:
+  - dependencies
+  - github-actions
