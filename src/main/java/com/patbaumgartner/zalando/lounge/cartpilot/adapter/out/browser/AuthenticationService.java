@@ -153,7 +153,16 @@ public class AuthenticationService {
 			return true;
 		}
 
-		return isSessionValidByProbe(context);
+		if (!isSessionValidByProbe(context)) {
+			return false;
+		}
+
+		// Stage B only checks the final URL, but Zalando Lounge serves the public
+		// landing page at /event without redirecting logged-out visitors to /login,
+		// so an expired session still passes. Stage C asks the cart API — it returns
+		// JSON only for authenticated sessions (logged-out requests get an HTML
+		// login/interstitial page instead).
+		return isSessionValidByCartApi(context);
 	}
 
 	private boolean isDevProfileActive() {
@@ -209,6 +218,41 @@ public class AuthenticationService {
 		}
 		catch (Exception e) {
 			log.info("Session validation stage B probe failed: {}", e.getMessage());
+			return false;
+		}
+	}
+
+	/**
+	 * Authoritative session check: the cart API returns JSON for authenticated sessions
+	 * and an HTML login/interstitial page otherwise. A URL-based probe cannot detect this
+	 * because Zalando Lounge does not redirect logged-out visitors.
+	 */
+	private boolean isSessionValidByCartApi(BrowserContext context) {
+		try {
+			var response = context.request()
+				.get(properties.zalando().cartApiUrl(),
+						com.microsoft.playwright.options.RequestOptions.create()
+							.setTimeout(sessionCheckTimeoutMs)
+							.setHeader("Accept", "application/json"));
+			try {
+				if (!response.ok()) {
+					log.info("Session validation stage C failed: cart API returned status {}", response.status());
+					return false;
+				}
+				String body = response.text() == null ? "" : response.text().strip();
+				boolean looksLikeJson = body.startsWith("{") || body.startsWith("[");
+				if (!looksLikeJson) {
+					log.info("Session validation stage C failed: cart API returned non-JSON (logged-out) response");
+					return false;
+				}
+				return true;
+			}
+			finally {
+				response.dispose();
+			}
+		}
+		catch (Exception e) {
+			log.info("Session validation stage C probe failed: {}", e.getMessage());
 			return false;
 		}
 	}
