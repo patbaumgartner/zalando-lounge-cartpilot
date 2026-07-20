@@ -31,9 +31,8 @@ public class PlaywrightConfiguration {
 	 * In a GraalVM native image, Playwright's {@code DriverJar} extracts its bundled
 	 * Node.js driver by walking classpath resources through the {@code resource:} NIO
 	 * file system, which must be opened explicitly first — otherwise it fails with
-	 * {@code FileSystemNotFoundException: The Native Image Resource File System is not
-	 * present}. On the JVM the {@code resource} scheme has no provider, so this is a
-	 * no-op there.
+	 * {@code FileSystemNotFoundException: The Native Image Resource File System is not present}.
+	 * On the JVM the {@code resource} scheme has no provider, so this is a no-op there.
 	 */
 	private void ensureNativeImageResourceFileSystem() {
 		try {
