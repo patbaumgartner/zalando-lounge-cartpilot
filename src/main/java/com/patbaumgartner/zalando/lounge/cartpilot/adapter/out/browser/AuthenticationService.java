@@ -260,6 +260,19 @@ public class AuthenticationService {
 	private void login(BrowserContext context) {
 		validateCredentials();
 		log.info("Logging in to Zalando Lounge...");
+		// The context is created from the persisted storage state, so it still
+		// carries the EXPIRED session cookies at this point. Zalando's web tier
+		// treats any session cookie as "logged in" and redirects /login back to
+		// /event, so the login form never renders and every attempt times out
+		// waiting for the email field. Drop the stale cookies first so the login
+		// page actually shows the form.
+		try {
+			context.clearCookies();
+			log.debug("Cleared stale session cookies before login");
+		}
+		catch (Exception e) {
+			log.warn("Failed to clear stale cookies before login: {}", e.getMessage());
+		}
 		warmUpSession(context);
 		Exception lastError = null;
 		AuthFailureCategory lastCategory = AuthFailureCategory.UNKNOWN;
