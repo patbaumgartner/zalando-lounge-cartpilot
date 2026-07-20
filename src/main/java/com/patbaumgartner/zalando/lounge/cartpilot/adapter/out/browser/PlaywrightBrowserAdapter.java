@@ -667,13 +667,13 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Opens a page, healing a silently-dropped Patchright connection. {@code
-	 * browser.isConnected()} can still report {@code true} after the sidecar dropped the
-	 * remote browser/context; {@code context.newPage()} then fails deep in the driver
-	 * with an opaque {@link java.util.NoSuchElementException} (no message), which used to
-	 * bubble up as {@code [UNKNOWN]: null}. Force a full reconnect and retry once, then
-	 * surface a descriptive {@link IllegalStateException} naming the endpoint and
-	 * connection state instead of the bare driver error.
+	 * Opens a page, healing a silently-dropped Patchright connection.
+	 * {@code browser.isConnected()} can still report {@code true} after the sidecar
+	 * dropped the remote browser/context; {@code context.newPage()} then fails deep in
+	 * the driver with an opaque {@link java.util.NoSuchElementException} (no message),
+	 * which used to bubble up as {@code [UNKNOWN]: null}. Force a full reconnect and
+	 * retry once, then surface a descriptive {@link IllegalStateException} naming the
+	 * endpoint and connection state instead of the bare driver error.
 	 */
 	private Page newLivePage() {
 		try {
