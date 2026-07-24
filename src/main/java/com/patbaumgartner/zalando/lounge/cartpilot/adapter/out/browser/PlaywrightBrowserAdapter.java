@@ -43,17 +43,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	private static final Logger log = LoggerFactory.getLogger(PlaywrightBrowserAdapter.class);
 
-	private static final String ADD_TO_CART_BTN = "button.auto-tests-add-to-cart-button";
-
 	private static final String SIZE_OPTION_SELECTOR = "input[name='size'][data-testid='article-size-toggle']";
-
-	/**
-	 * Marker that precedes the server-rendered Redux state blob in every article
-	 * document. The article's size/stock data lives under
-	 * {@code articleDetails.article.simples}; reading it from this blob avoids rendering
-	 * (and hydrating) the whole single-page app just to learn which sizes are in stock.
-	 */
-	private static final String INITIAL_STATE_MARKER = "__INITIAL_STATE__";
 
 	/**
 	 * How many times to retry the article document request when the site answers
@@ -79,6 +69,9 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	private static final java.util.regex.Pattern ARTICLE_ID_PATTERN = java.util.regex.Pattern
 		.compile("/articles/([^/?#]+)");
+
+	private static final java.util.regex.Pattern CAMPAIGN_ID_PATTERN = java.util.regex.Pattern
+		.compile("/campaigns/([^/?#]+)");
 
 	private final Playwright playwright;
 
@@ -184,60 +177,57 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Reads the article's enrichment (sizes + gender) straight from the document's
-	 * server-rendered state instead of navigating and waiting for the single-page app to
-	 * hydrate. A single authenticated {@code GET} returns HTML containing
-	 * {@code window.__INITIAL_STATE__}, whose {@code articleDetails.article} node lists
-	 * every size with its {@code stockStatus} and the {@code genders} array that names
-	 * the target group (gender).
-	 * @return the parsed sizes (possibly empty when every size is sold out) and resolved
-	 * gender, or {@code null} when the state blob could not be located/parsed so the
-	 * caller can fall back to rendering.
+	 * Reads the article's enrichment (available sizes + gender) from the catalog article
+	 * detail API. Returns {@code null} when the article could not be loaded so the caller
+	 * can fall back to rendering.
 	 */
 	private ProductDetails fetchProductDetailsViaApi(String productUrl) {
+		JsonNode article = fetchArticleNode(productUrl);
+		if (article == null) {
+			return null;
+		}
+		var sizes = CatalogArticleSupport.availableSizes(article.path("simples"));
+		return new ProductDetails(sizes, CatalogArticleSupport.resolveGender(article.path("gender")));
+	}
+
+	/**
+	 * Fetches a single article's catalog JSON
+	 * ({@code /api/phoenix/catalog/events/{campaignId}/articles/{sku}}) through the
+	 * authenticated request context, retrying on 429. Returns {@code null} when the id
+	 * could not be derived or the request failed.
+	 */
+	private JsonNode fetchArticleNode(String productUrl) {
+		String campaignId = campaignId(productUrl);
+		String sku = articleId(productUrl);
+		if (campaignId == null || sku == null) {
+			return null;
+		}
+		String apiUrl = origin(productUrl) + "/api/phoenix/catalog/events/" + campaignId + "/articles/" + sku;
 		var request = connectedRequestContext();
 		try {
 			for (int attempt = 0; attempt <= SIZE_API_RATE_LIMIT_RETRIES; attempt++) {
 				paceApiRequest();
-				var response = request.get(productUrl);
+				var response = request.get(apiUrl, com.microsoft.playwright.options.RequestOptions.create()
+					.setHeader("Accept", "application/json"));
 				try {
 					if (response.status() == 429) {
 						if (attempt == SIZE_API_RATE_LIMIT_RETRIES) {
 							log.warn("Article request still rate-limited (429) after {} retries for {}",
-									SIZE_API_RATE_LIMIT_RETRIES, productUrl);
+									SIZE_API_RATE_LIMIT_RETRIES, apiUrl);
 							return null;
 						}
 						long backoff = SIZE_API_RETRY_BACKOFF_MS * (1L << attempt);
-						log.debug("Rate-limited (429) on {}; retrying in {} ms (attempt {}/{})", productUrl, backoff,
+						log.debug("Rate-limited (429) on {}; retrying in {} ms (attempt {}/{})", apiUrl, backoff,
 								attempt + 1, SIZE_API_RATE_LIMIT_RETRIES);
 						Thread.sleep(backoff);
 						continue;
 					}
 					if (!response.ok()) {
-						log.warn("Article request returned status {} for {}", response.status(), productUrl);
+						log.warn("Article request returned status {} for {}", response.status(), apiUrl);
 						return null;
 					}
-
-					JsonNode article = extractArticle(response.text());
-					if (article == null) {
-						return null;
-					}
-
-					JsonNode simples = article.path("simples");
-					if (!simples.isArray()) {
-						return null;
-					}
-
-					var sizes = new ArrayList<String>();
-					for (JsonNode simple : simples) {
-						if ("AVAILABLE".equals(simple.path("stockStatus").asString(""))) {
-							String size = simple.path("size").asString("").trim();
-							if (!size.isBlank()) {
-								sizes.add(size);
-							}
-						}
-					}
-					return new ProductDetails(sizes, detectGender(article));
+					JsonNode article = objectMapper.readTree(response.text());
+					return article.isObject() ? article : null;
 				}
 				finally {
 					// Free the buffered response body in the Playwright driver; otherwise
@@ -253,112 +243,34 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			return null;
 		}
 		catch (Exception e) {
-			log.debug("Could not read article state for {}: {}", productUrl, e.getMessage());
+			log.debug("Could not read article detail for {}: {}", apiUrl, e.getMessage());
 			return null;
 		}
 	}
 
-	/**
-	 * Extracts the {@code articleDetails.article} node from an article document's
-	 * embedded {@code window.__INITIAL_STATE__} blob, or {@code null} when the marker is
-	 * missing or the JSON cannot be parsed into the expected shape.
-	 */
-	private JsonNode extractArticle(String html) {
-		int marker = html.indexOf(INITIAL_STATE_MARKER);
-		if (marker < 0) {
+	private static String campaignId(String productUrl) {
+		if (productUrl == null) {
 			return null;
 		}
-		int start = html.indexOf('{', marker);
-		if (start < 0) {
-			return null;
-		}
-		int end = matchClosingBrace(html, start);
-		if (end < 0) {
-			return null;
-		}
+		var matcher = CAMPAIGN_ID_PATTERN.matcher(productUrl);
+		return matcher.find() ? matcher.group(1) : null;
+	}
 
+	private String origin(String url) {
 		try {
-			JsonNode state = objectMapper.readTree(html.substring(start, end));
-			JsonNode article = state.path("articleDetails").path("article");
-			return article.isObject() ? article : null;
-		}
-		catch (Exception e) {
-			log.debug("Failed to parse server-rendered article state: {}", e.getMessage());
-			return null;
-		}
-	}
-
-	/**
-	 * Resolves the article's gender from its server-rendered {@code genders} array (e.g.
-	 * {@code ["male"]} → MEN, {@code ["female"]} → WOMEN). Mixed or unknown values fall
-	 * back to {@link Gender#UNISEX} so the gender gate never over-filters.
-	 */
-	private static Gender detectGender(JsonNode article) {
-		JsonNode genders = article.path("genders");
-		if (!genders.isArray() || genders.isEmpty()) {
-			return Gender.UNISEX;
-		}
-		boolean male = false;
-		boolean female = false;
-		boolean kids = false;
-		for (JsonNode g : genders) {
-			switch (g.asString("").trim().toLowerCase(java.util.Locale.ROOT)) {
-				case "male", "men", "man" -> male = true;
-				case "female", "women", "woman" -> female = true;
-				case "boy", "girl", "kid", "kids", "baby", "junior", "children" -> kids = true;
-				default -> {
-					// unknown/unisex token contributes no vote
+			var uri = java.net.URI.create(url);
+			if (uri.getScheme() != null && uri.getHost() != null) {
+				var origin = new StringBuilder(uri.getScheme()).append("://").append(uri.getHost());
+				if (uri.getPort() > 0) {
+					origin.append(':').append(uri.getPort());
 				}
+				return origin.toString();
 			}
 		}
-		if (kids && !male && !female) {
-			return Gender.KIDS;
+		catch (Exception ignored) {
+			// fall through to the configured base URL
 		}
-		if (male && !female) {
-			return Gender.MEN;
-		}
-		if (female && !male) {
-			return Gender.WOMEN;
-		}
-		return Gender.UNISEX;
-	}
-
-	/**
-	 * Returns the index just past the brace that closes the JSON object opened at
-	 * {@code start}, honouring quoted strings and escapes, or {@code -1} when unbalanced.
-	 */
-	private static int matchClosingBrace(String s, int start) {
-		int depth = 0;
-		boolean inString = false;
-		boolean escaped = false;
-		for (int i = start; i < s.length(); i++) {
-			char c = s.charAt(i);
-			if (escaped) {
-				escaped = false;
-				continue;
-			}
-			if (c == '\\') {
-				escaped = true;
-				continue;
-			}
-			if (c == '"') {
-				inString = !inString;
-				continue;
-			}
-			if (inString) {
-				continue;
-			}
-			if (c == '{') {
-				depth++;
-			}
-			else if (c == '}') {
-				depth--;
-				if (depth == 0) {
-					return i + 1;
-				}
-			}
-		}
-		return -1;
+		return properties.zalando().baseUrl();
 	}
 
 	/**
@@ -386,53 +298,59 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	@Override
 	public boolean addToCart(String productUrl, String size) {
-		try (var page = openPage()) {
-			page.navigate(productUrl);
-			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-			acceptCookieBannerOnce(page);
+		try {
+			String campaignId = campaignId(productUrl);
+			String configSku = articleId(productUrl);
+			if (campaignId == null || configSku == null) {
+				log.warn("Could not derive campaign/article id for cart add: {}", productUrl);
+				return false;
+			}
 
-			// Wait for the size options to render (SPA hydration).
-			var sizeInputs = page.locator(SIZE_OPTION_SELECTOR);
+			// The article's per-size stockcart sku ("simpleSku") is required by the
+			// basket API; look it up from the authoritative catalog detail so a size sold
+			// out since discovery is caught here rather than added blindly.
+			JsonNode article = fetchArticleNode(productUrl);
+			if (article == null) {
+				log.warn("Could not load article detail for cart add: {}", productUrl);
+				return false;
+			}
+			String simpleSku = simpleSkuForSize(article.path("simples"), size);
+			if (simpleSku == null) {
+				log.warn("Size '{}' not available on {} — cannot add to cart", size, productUrl);
+				return false;
+			}
+
+			// Add through the authoritative stockcart API (the SPA's own POST). Driving
+			// the article page's add-to-cart button does not register the add under a
+			// headless browser, so the API path is both more reliable and much faster.
+			var request = connectedRequestContext();
+			var payload = new java.util.LinkedHashMap<String, Object>();
+			payload.put("campaignIdentifier", campaignId);
+			payload.put("configSku", configSku);
+			payload.put("simpleSku", simpleSku);
+			payload.put("quantity", 1);
+			payload.put("additional", java.util.Map.of("reco", "0"));
+			var response = request.post(properties.zalando().cartApiUrl() + "/items",
+					com.microsoft.playwright.options.RequestOptions.create()
+						.setHeader("Content-Type", "application/json")
+						.setHeader("Accept", "application/json")
+						.setData(objectMapper.writeValueAsString(payload)));
 			try {
-				sizeInputs.first().waitFor(new Locator.WaitForOptions().setTimeout(10_000));
-			}
-			catch (Exception e) {
-				log.warn("No size options rendered on {}", productUrl);
-				return false;
-			}
-
-			String requested = (size == null) ? null : size.trim();
-			String selectedSize = selectSize(page, sizeInputs, requested);
-			if (selectedSize == null) {
-				log.warn("No selectable size found on {} (requested='{}')", productUrl, size);
-				return false;
-			}
-			log.info("Selected size '{}' on {}", selectedSize, productUrl);
-
-			var addButton = page.locator(ADD_TO_CART_BTN).first();
-			try {
-				addButton.waitFor(new Locator.WaitForOptions().setTimeout(5_000));
-			}
-			catch (Exception e) {
-				log.warn("Add-to-cart button not found on {}", productUrl);
-				return false;
-			}
-			addButton.click();
-
-			// The "In den Warenkorb" button text does not change and the SPA never goes
-			// network-idle, so confirm the add against the cart API (the authoritative
-			// basket) rather than scraping the DOM. Poll briefly while the add-to-cart
-			// XHR settles.
-			String articleId = articleId(productUrl);
-			boolean inCart = false;
-			for (int attempt = 0; attempt < 6; attempt++) {
-				page.waitForTimeout(500);
-				if (isInCartViaApi(page, articleId)) {
-					inCart = true;
-					break;
+				if (!response.ok()) {
+					log.warn("Cart add API returned status {} for {} (size {})", response.status(), productUrl, size);
+					return false;
 				}
 			}
-			log.info("addToCart result for {} (size {}): inCart={}", productUrl, selectedSize, inCart);
+			finally {
+				response.dispose();
+			}
+
+			boolean inCart = fetchCartItems(request).stream().anyMatch(item -> configSku.equals(item.configSku()));
+			log.atInfo()
+				.addArgument(productUrl)
+				.addArgument(size)
+				.addArgument(inCart)
+				.log("addToCart result for {} (size {}): inCart={}");
 			return inCart;
 		}
 		catch (Exception e) {
@@ -442,29 +360,27 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Selects an available size on an article detail page. When {@code requested} is
-	 * blank, the first selectable (non-disabled) size is chosen. Returns the size label
-	 * that was selected, or {@code null} when no match is available.
+	 * Resolves the per-size stockcart sku ({@code simpleSku}) for the requested size from
+	 * an article's {@code simples}, matching on the display size ({@code filterValue}) or
+	 * the EU country size and requiring the size to be in stock. Returns {@code null}
+	 * when the size is not available.
 	 */
-	private String selectSize(Page page, Locator sizeInputs, String requested) {
-		int count = sizeInputs.count();
-		for (int i = 0; i < count; i++) {
-			var input = sizeInputs.nth(i);
-			if (Boolean.TRUE.equals(input.isDisabled())) {
+	private static String simpleSkuForSize(JsonNode simples, String size) {
+		if (simples == null || !simples.isArray() || size == null || size.isBlank()) {
+			return null;
+		}
+		String target = size.trim();
+		for (JsonNode simple : simples) {
+			if (!"AVAILABLE".equals(simple.path("stockStatus").asString(""))) {
 				continue;
 			}
-			String id = input.getAttribute("id");
-			if (id == null || id.isBlank()) {
-				continue;
-			}
-			var label = page.locator("label[for='%s']".formatted(id));
-			if (label.count() == 0) {
-				continue;
-			}
-			String optionSize = label.first().innerText().trim().split("\\R")[0].trim();
-			if (requested == null || requested.isBlank() || optionSize.equalsIgnoreCase(requested)) {
-				label.first().click();
-				return optionSize;
+			String filterValue = simple.path("filterValue").asString("").trim();
+			String euSize = simple.path("country_sizes").path("eu").asString("").trim();
+			if (target.equalsIgnoreCase(filterValue) || target.equalsIgnoreCase(euSize)) {
+				String simpleSku = simple.path("sku").asString("").trim();
+				if (!simpleSku.isBlank()) {
+					return simpleSku;
+				}
 			}
 		}
 		return null;

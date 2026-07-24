@@ -158,10 +158,19 @@ public class CampaignScannerService {
 			if (!candidates.isEmpty()) {
 				log.atInfo().addArgument(candidates.size()).log("Fetching sizes for {} brand/price candidate(s)...");
 				for (var candidate : candidates) {
+					// The catalog listing already populated sizes/gender, so only fall
+					// back to a per-article detail fetch for the rare candidate with no
+					// sizes yet. This avoids hundreds of redundant (and rate-limited)
+					// detail calls on a full scan of every open campaign.
+					if (!candidate.sizesAvailable().isEmpty()) {
+						continue;
+					}
 					try {
 						var details = browser.fetchProductDetails(candidate.productUrl());
-						candidate.applyAvailableSizes(details.sizes());
-						candidate.applyGender(details.gender());
+						if (!details.sizes().isEmpty()) {
+							candidate.applyAvailableSizes(details.sizes());
+							candidate.applyGender(details.gender());
+						}
 					}
 					catch (Exception e) {
 						log.warn("Failed to fetch details for {}: {}", candidate.productUrl(), e.getMessage());
