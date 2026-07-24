@@ -55,7 +55,7 @@ class PlaywrightBrowserAdapterE2ETest {
 	}
 
 	@Test
-	@DisplayName("reads in-stock sizes from the server-rendered article state")
+	@DisplayName("reads in-stock sizes from the catalog article API")
 	void readsInStockSizesFromServerState() throws Exception {
 		try (var server = new MockCartServer();
 				var playwright = Playwright.create();
@@ -70,7 +70,7 @@ class PlaywrightBrowserAdapterE2ETest {
 
 			// The sold-out size (54) is excluded; only AVAILABLE simples are returned.
 			assertThat(details.sizes()).containsExactly("48", "50", "52");
-			// Gender is read from the article state's "genders" array (["male"] → MEN).
+			// Gender is read from the article's "gender" array (["male"] → MEN).
 			assertThat(details.gender()).isEqualTo(Gender.MEN);
 		}
 	}
@@ -166,9 +166,11 @@ class PlaywrightBrowserAdapterE2ETest {
 			this.productUrl = baseUrl + "/campaigns/MOCK/articles/" + ARTICLE_ID;
 
 			server.createContext("/campaigns/MOCK/articles/" + ARTICLE_ID, this::handleProductPage);
+			server.createContext("/api/phoenix/catalog/events/MOCK/articles/" + ARTICLE_ID,
+					this::handleArticleDetailApi);
 			server.createContext("/cart", this::handleCartPage);
 			server.createContext("/api/phoenix/stockcart/cart", this::handleCartApi);
-			server.createContext("/api/phoenix/stockcart/cart/items", this::handleRemoveCartApiItem);
+			server.createContext("/api/phoenix/stockcart/cart/items", this::handleCartItemsApi);
 			server.createContext("/api/cart/add", this::handleAddToCart);
 			server.createContext("/", this::handleRoot);
 			server.start();
@@ -237,6 +239,28 @@ class PlaywrightBrowserAdapterE2ETest {
 							""");
 		}
 
+		private void handleArticleDetailApi(HttpExchange exchange) throws IOException {
+			respondJson(exchange, 200, """
+					{
+					  "brand": "Mammut",
+					  "nameCategoryTag": "Convey Tour Jacke",
+					  "gender": ["male"],
+					  "price": 45000,
+					  "specialPrice": 22500,
+					  "savings": 50,
+					  "sku": "MAMMUT123-K11",
+					  "stockStatus": "AVAILABLE",
+					  "simples": [
+					    {"filterValue": "48", "stockStatus": "AVAILABLE", "sku": "MAMMUT123-K110048000"},
+					    {"filterValue": "50", "stockStatus": "AVAILABLE", "sku": "MAMMUT123-K110050000"},
+					    {"filterValue": "52", "stockStatus": "AVAILABLE", "sku": "MAMMUT123-K110052000"},
+					    {"filterValue": "54", "stockStatus": "SOLD_OUT", "sku": "MAMMUT123-K110054000"}
+					  ],
+					  "urlPath": {"40": "/campaigns/MOCK/categories/1/articles/MAMMUT123-K11"}
+					}
+					""");
+		}
+
 		private void handleCartPage(HttpExchange exchange) throws IOException {
 			respondHtml(exchange, 200, """
 					<!doctype html>
@@ -272,15 +296,21 @@ class PlaywrightBrowserAdapterE2ETest {
 			respondJson(exchange, 200, "{\"count\":1}");
 		}
 
-		private void handleRemoveCartApiItem(HttpExchange exchange) throws IOException {
-			if (!"DELETE".equals(exchange.getRequestMethod())
-					|| !exchange.getRequestURI().getPath().endsWith("/" + CART_ITEM_KEY)) {
-				respondJson(exchange, 404, "{\"error\":\"not_found\"}");
+		private void handleCartItemsApi(HttpExchange exchange) throws IOException {
+			String method = exchange.getRequestMethod();
+			if ("POST".equals(method)) {
+				addCount.incrementAndGet();
+				cartCount.set(1);
+				respondJson(exchange, 200, "{\"cartItemKey\":\"" + CART_ITEM_KEY + "\"}");
 				return;
 			}
-			removeCount.incrementAndGet();
-			cartCount.set(0);
-			exchange.sendResponseHeaders(204, -1);
+			if ("DELETE".equals(method) && exchange.getRequestURI().getPath().endsWith("/" + CART_ITEM_KEY)) {
+				removeCount.incrementAndGet();
+				cartCount.set(0);
+				exchange.sendResponseHeaders(204, -1);
+				return;
+			}
+			respondJson(exchange, 404, "{\"error\":\"not_found\"}");
 		}
 
 		private void respondHtml(HttpExchange exchange, int status, String html) throws IOException {

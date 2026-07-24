@@ -1,31 +1,44 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.browser;
 
-import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
+import com.microsoft.playwright.options.RequestOptions;
 import com.microsoft.playwright.options.WaitUntilState;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Category;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
-import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Gender;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.net.URI;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
- * Scrapes campaigns and products from the Zalando Lounge SSR HTML.
+ * Fetches open campaigns and their articles from the Zalando Lounge phoenix JSON APIs.
+ *
+ * <p>
+ * The Lounge web app is a single-page Angular application that no longer exposes a
+ * {@code window.__INITIAL_STATE__} blob, so campaigns and products are read straight from
+ * the authenticated JSON endpoints instead of being scraped from server-rendered markup:
+ * <ul>
+ * <li>{@code GET /api/phoenix/mylounge/campaigns} → the currently open campaigns.</li>
+ * <li>{@code GET /api/phoenix/catalog/events/{campaignId}/articles} → a campaign's
+ * articles, each already carrying brand, gender, prices and per-size stock.</li>
+ * </ul>
+ * Both are queried through the page's {@link com.microsoft.playwright.APIRequestContext}
+ * (which shares the authenticated browser context's cookie jar), so no page rendering or
+ * DOM scraping is required.
  */
 @Component
 @Profile("!test")
@@ -33,76 +46,108 @@ class CampaignScraper {
 
 	private static final Logger log = LoggerFactory.getLogger(CampaignScraper.class);
 
-	private static final String INITIAL_STATE_SCRIPT = "() => JSON.stringify(window.__INITIAL_STATE__?.mylounge?.openCampaigns ?? [])";
+	private static final ZoneId ZURICH = ZoneId.of("Europe/Zurich");
 
-	private static final String PRODUCT_CARD_SELECTOR = "[data-testid='lux-article-card']";
+	private static final String CAMPAIGNS_API_PATH = "/api/phoenix/mylounge/campaigns";
 
-	private static final String CAMPAIGN_LINK_SELECTOR = "a[href*='/campaigns/'], a[href*='/event/']";
+	private static final String ARTICLES_API_PATH = "/api/phoenix/catalog/events/%s/articles";
 
-	private static final String CAMPAIGN_IMAGE_SELECTOR = "img[src*='/albums/']";
+	/** Zalando's catalog page size; also the maximum returned per request. */
+	private static final int ARTICLE_PAGE_SIZE = 84;
+
+	/** Hard cap on article pages fetched per campaign (84 × 6 = 504 articles). */
+	private static final int MAX_ARTICLE_PAGES = 6;
+
+	/** Retries when the catalog article API answers 429 (Akamai rate limiting). */
+	private static final int ARTICLE_RATE_LIMIT_RETRIES = 5;
+
+	/** Base backoff for 429 retries, doubled each attempt. */
+	private static final long ARTICLE_RETRY_BACKOFF_MS = 700;
+
+	/**
+	 * Minimum spacing between catalog article requests. Scanning every open campaign
+	 * fires hundreds of listing requests; without pacing the burst trips Akamai's rate
+	 * limiter (429) and whole campaigns come back empty. Throttling keeps the scan under
+	 * the threshold so it completes without losing products.
+	 */
+	private static final long ARTICLE_MIN_INTERVAL_MS = 300;
+
+	/** de-CH language id keying the localized product URL in {@code urlPath}. */
+	private static final String URL_PATH_LANG = "40";
+
+	private static final String DEFAULT_ORIGIN = "https://www.zalando-lounge.ch";
 
 	private final ObjectMapper objectMapper;
 
 	private final AuthenticationService authenticationService;
+
+	private long lastArticleRequestAtNanos;
 
 	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService) {
 		this.objectMapper = objectMapper;
 		this.authenticationService = authenticationService;
 	}
 
+	/**
+	 * Returns the currently open campaigns from the authenticated My Lounge API. Ended or
+	 * not-yet-started campaigns are filtered out; every remaining campaign is shoppable
+	 * right now, regardless of which day it launched (Lounge campaigns run for several
+	 * days).
+	 */
 	List<Campaign> scrapeOpenCampaigns(Page page, String campaignUrl) {
+		// Land on /event first: this establishes the site origin/cookies and lets the
+		// Patchright browser clear Akamai before we hit the JSON API.
 		page.navigate(campaignUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
 		authenticationService.acceptCookieBannerIfPresent(page);
-		waitForInitialCampaignState(page);
 
-		var raw = (String) page.evaluate(INITIAL_STATE_SCRIPT);
-
-		var campaigns = parseCampaignsFromSsr(raw);
-		if (!campaigns.isEmpty()) {
-			return campaigns;
+		String apiUrl = origin(campaignUrl) + CAMPAIGNS_API_PATH;
+		var response = page.request().get(apiUrl, RequestOptions.create().setHeader("Accept", "application/json"));
+		try {
+			if (!response.ok()) {
+				log.error("My Lounge campaigns API returned status {} ({})", response.status(), apiUrl);
+				return List.of();
+			}
+			return parseOpenCampaigns(response.text());
 		}
-
-		log.debug("No open campaigns in SSR state, trying DOM campaign link fallback");
-		campaigns = scrapeCampaignsFromDom(page, campaignUrl);
-		if (!campaigns.isEmpty()) {
-			return campaigns;
+		catch (Exception e) {
+			log.error("Failed to fetch open campaigns from {}: {}", apiUrl, e.getMessage(), e);
+			return List.of();
 		}
-
-		log.debug("No DOM campaign links found, trying album-image campaign fallback");
-		campaigns = scrapeCampaignsFromAlbumImages(page, campaignUrl);
-		if (!campaigns.isEmpty()) {
-			return campaigns;
+		finally {
+			response.dispose();
 		}
-
-		log.warn("Campaign discovery returned empty; falling back to scanning landing page directly");
-		return List.of(new Campaign("landing-page", "Landing Page", LocalDate.now(), campaignUrl));
 	}
 
+	/**
+	 * Fetches every article for a campaign from the catalog API. Each article already
+	 * carries brand, gender, prices and per-size stock, so no per-product detail lookup
+	 * or page render is required here.
+	 */
 	List<DiscoveredProduct> scrapeProducts(Page page, Campaign campaign) {
-		var url = campaign.campaignUrl().isBlank() ? "https://www.zalando-lounge.ch/event/" + campaign.campaignId()
-				: campaign.campaignUrl();
-
-		page.navigate(url, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-		authenticationService.acceptCookieBannerIfPresent(page);
-		waitForProductCards(page, campaign.campaignId());
-
-		// Products are rendered in the DOM as article cards
-		var productCards = page.querySelectorAll(PRODUCT_CARD_SELECTOR);
+		String origin = origin(campaign.campaignUrl().isBlank() ? DEFAULT_ORIGIN : campaign.campaignUrl());
 		var products = new ArrayList<DiscoveredProduct>();
 
-		for (var card : productCards) {
-			try {
-				products.add(parseProductCard(card, campaign));
+		for (int pageNo = 0; pageNo < MAX_ARTICLE_PAGES; pageNo++) {
+			var articles = fetchArticlePage(page, origin, campaign.campaignId(), pageNo);
+			if (articles.isEmpty()) {
+				break;
 			}
-			catch (Exception e) {
-				log.error("Skipped unparseable product card: {}", e.getMessage(), e);
+			for (JsonNode article : articles) {
+				try {
+					products.add(toDiscoveredProduct(article, campaign, origin));
+				}
+				catch (Exception e) {
+					log.debug("Skipped unparseable article in campaign {}: {}", campaign.campaignId(), e.getMessage());
+				}
+			}
+			if (articles.size() < ARTICLE_PAGE_SIZE) {
+				break;
 			}
 		}
 
 		log.atInfo()
-			.addArgument(() -> products.size())
+			.addArgument(products.size())
 			.addArgument(campaign.campaignId())
 			.log("Scraped {} products from campaign {}");
 		return products;
@@ -110,222 +155,191 @@ class CampaignScraper {
 
 	// ── Private helpers ────────────────────────────────────────
 
-	private void waitForInitialCampaignState(Page page) {
+	private List<Campaign> parseOpenCampaigns(String body) {
+		if (body == null || body.isBlank()) {
+			return List.of();
+		}
+		JsonNode open;
 		try {
-			page.waitForFunction("() => !!window.__INITIAL_STATE__?.mylounge?.openCampaigns",
-					new Page.WaitForFunctionOptions().setTimeout(10_000));
+			open = objectMapper.readTree(body).path("open_campaigns");
 		}
 		catch (Exception e) {
-			log.debug("Campaign initial state did not appear before timeout; continuing with best-effort scrape");
+			log.error("Failed to parse My Lounge campaigns response: {}", e.getMessage(), e);
+			return List.of();
 		}
-	}
-
-	private List<Campaign> parseCampaignsFromSsr(String raw) {
-		if (raw == null || "[]".equals(raw)) {
+		if (!open.isArray()) {
+			log.warn("My Lounge campaigns response contained no open_campaigns array");
 			return List.of();
 		}
 
-		try {
-			var node = objectMapper.readTree(raw);
-			var today = LocalDate.now();
-			var campaigns = new ArrayList<Campaign>();
-
-			for (var campaignNode : node) {
-				var startsAt = parseDate(campaignNode.path("startsAt").asString());
-				if (startsAt != null && startsAt.equals(today)) {
-					campaigns.add(new Campaign(campaignNode.path("id").asString(),
-							campaignNode.path("title").asString(""), startsAt, campaignNode.path("url").asString("")));
-				}
+		var now = Instant.now();
+		var campaigns = new ArrayList<Campaign>();
+		for (JsonNode node : open) {
+			String id = node.path("campaign_id").asString("").trim();
+			if (id.isBlank()) {
+				continue;
 			}
-
-			if (campaigns.isEmpty()) {
-				log.debug("SSR campaign state parsed but no entries match today's date");
+			var endsAt = parseInstant(node.path("ends_at").asString(""));
+			if (endsAt != null && endsAt.isBefore(now)) {
+				continue; // already closed
 			}
-			return campaigns;
-		}
-		catch (Exception e) {
-			log.error("Failed to parse campaign SSR state: {}", e.getMessage(), e);
-			return List.of();
-		}
-	}
-
-	private List<Campaign> scrapeCampaignsFromDom(Page page, String campaignUrl) {
-		var links = page.querySelectorAll(CAMPAIGN_LINK_SELECTOR);
-		if (links.isEmpty()) {
-			log.debug("No campaign links found in DOM fallback");
-			return List.of();
-		}
-
-		LocalDate today = LocalDate.now();
-		Set<String> seenIds = new LinkedHashSet<>();
-		List<Campaign> campaigns = new ArrayList<>();
-
-		for (var link : links) {
-			try {
-				String href = link.getAttribute("href");
-				if (href == null || href.isBlank()) {
-					continue;
-				}
-
-				String normalizedUrl = normalizeUrl(campaignUrl, href);
-				String campaignId = extractCampaignId(normalizedUrl);
-				if (campaignId == null || campaignId.isBlank() || !seenIds.add(campaignId)) {
-					continue;
-				}
-
-				String title = (link.textContent() == null ? "" : link.textContent().trim());
-				campaigns.add(new Campaign(campaignId, title, today, normalizedUrl));
+			var startsAt = parseInstant(node.path("starts_at").asString(""));
+			if (startsAt != null && startsAt.isAfter(now)) {
+				continue; // not open yet
 			}
-			catch (Exception ignored) {
-				// Best-effort fallback; skip malformed links.
-			}
+			String title = node.path("name").asString(id);
+			String url = node.path("url").asString("").trim();
+			LocalDate startDate = startsAt != null ? LocalDate.ofInstant(startsAt, ZURICH) : LocalDate.now(ZURICH);
+			campaigns.add(new Campaign(id, title, startDate, url));
 		}
-
-		log.info("DOM fallback discovered {} campaign link(s)", campaigns.size());
+		log.info("Fetched {} open campaign(s) from My Lounge API", campaigns.size());
 		return campaigns;
 	}
 
-	private List<Campaign> scrapeCampaignsFromAlbumImages(Page page, String campaignUrl) {
-		var images = page.querySelectorAll(CAMPAIGN_IMAGE_SELECTOR);
-		if (images.isEmpty()) {
-			log.debug("No campaign album images found in fallback");
-			return List.of();
-		}
-
-		LocalDate today = LocalDate.now();
-		Set<String> seenIds = new LinkedHashSet<>();
-		List<Campaign> campaigns = new ArrayList<>();
-
-		for (var image : images) {
+	private List<JsonNode> fetchArticlePage(Page page, String origin, String campaignId, int pageNo) {
+		String apiUrl = origin + ARTICLES_API_PATH.formatted(campaignId) + "?size=" + ARTICLE_PAGE_SIZE
+				+ "&fields=1&sort=relevance&no_soldout=0&page=" + pageNo;
+		for (int attempt = 0; attempt <= ARTICLE_RATE_LIMIT_RETRIES; attempt++) {
+			paceArticleRequest();
+			var response = page.request().get(apiUrl, RequestOptions.create().setHeader("Accept", "application/json"));
 			try {
-				String src = image.getAttribute("src");
-				if (src == null || src.isBlank()) {
+				if (response.status() == 429 && attempt < ARTICLE_RATE_LIMIT_RETRIES) {
+					sleep(ARTICLE_RETRY_BACKOFF_MS * (1L << attempt));
 					continue;
 				}
-
-				String albumId = extractAlbumId(src);
-				if (albumId == null || albumId.isBlank() || !seenIds.add(albumId)) {
-					continue;
+				if (!response.ok()) {
+					// A campaign can close between listing and scrape (404/410); only the
+					// first page is worth logging so a genuinely empty result stays
+					// quiet.
+					if (pageNo == 0) {
+						log.warn("Articles API returned status {} for campaign {}", response.status(), campaignId);
+					}
+					return List.of();
 				}
-
-				String albumCampaignUrl = normalizeUrl(campaignUrl, "/event/" + albumId);
-				campaigns.add(new Campaign(albumId, "Album " + albumId.substring(0, Math.min(8, albumId.length())),
-						today, albumCampaignUrl));
+				var root = objectMapper.readTree(response.text());
+				if (!root.isArray()) {
+					return List.of();
+				}
+				var list = new ArrayList<JsonNode>();
+				root.forEach(list::add);
+				return list;
 			}
-			catch (Exception ignored) {
-				// Best-effort fallback; skip malformed sources.
+			catch (Exception e) {
+				log.debug("Failed to fetch articles page {} for campaign {}: {}", pageNo, campaignId, e.getMessage());
+				return List.of();
 			}
-		}
-
-		log.info("Album-image fallback discovered {} campaign candidate(s)", campaigns.size());
-		return campaigns;
-	}
-
-	private String normalizeUrl(String pageUrl, String href) {
-		if (href.startsWith("http://") || href.startsWith("https://")) {
-			return href;
-		}
-		if (href.startsWith("/")) {
-			return "https://www.zalando-lounge.ch" + href;
-		}
-		int slashIndex = pageUrl.indexOf("/", "https://".length());
-		String origin = slashIndex > 0 ? pageUrl.substring(0, slashIndex) : pageUrl;
-		return origin + "/" + href;
-	}
-
-	private String extractCampaignId(String url) {
-		String path = url;
-		int queryIndex = path.indexOf('?');
-		if (queryIndex >= 0) {
-			path = path.substring(0, queryIndex);
-		}
-
-		String[] segments = path.split("/");
-		for (int i = 0; i < segments.length - 1; i++) {
-			if ("campaigns".equals(segments[i]) || "event".equals(segments[i])) {
-				return segments[i + 1];
+			finally {
+				response.dispose();
 			}
 		}
-		return null;
+		return List.of();
 	}
 
-	private String extractAlbumId(String src) {
-		String value = src;
-		int queryIndex = value.indexOf('?');
-		if (queryIndex >= 0) {
-			value = value.substring(0, queryIndex);
-		}
-
-		String[] segments = value.split("/");
-		for (int i = 0; i < segments.length - 1; i++) {
-			if ("albums".equals(segments[i])) {
-				return segments[i + 1];
-			}
-		}
-		return null;
-	}
-
-	private void waitForProductCards(Page page, String campaignId) {
+	private static void sleep(long millis) {
 		try {
-			// Product/campaign pages are SPAs whose background requests may never go
-			// idle, so rely on DOM/content readiness (waitForSelector below) instead of
-			// NETWORKIDLE.
-			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-			page.waitForSelector(PRODUCT_CARD_SELECTOR, new Page.WaitForSelectorOptions().setTimeout(10_000));
-			var cards = page.querySelectorAll(PRODUCT_CARD_SELECTOR);
-			log.debug("Product cards visible for campaign {}: {} found", campaignId, cards.size());
+			Thread.sleep(millis);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Throttles catalog article requests to at most one per
+	 * {@link #ARTICLE_MIN_INTERVAL_MS}. Runs on the single scan thread, so no
+	 * synchronization is needed.
+	 */
+	private void paceArticleRequest() {
+		long now = System.nanoTime();
+		if (lastArticleRequestAtNanos != 0) {
+			long elapsedMs = (now - lastArticleRequestAtNanos) / 1_000_000L;
+			long waitMs = ARTICLE_MIN_INTERVAL_MS - elapsedMs;
+			if (waitMs > 0) {
+				sleep(waitMs);
+			}
+		}
+		lastArticleRequestAtNanos = System.nanoTime();
+	}
+
+	private DiscoveredProduct toDiscoveredProduct(JsonNode article, Campaign campaign, String origin) {
+		String brand = article.path("brand").asString("").trim();
+		String name = firstNonBlank(article.path("nameCategoryTag").asString("").trim(),
+				article.path("nameShop").asString("").trim(), "Unknown");
+		var gender = CatalogArticleSupport.resolveGender(article.path("gender"));
+		var sizes = CatalogArticleSupport.availableSizes(article.path("simples"));
+		var originalPrice = CatalogArticleSupport.centsToAmount(article.path("price"));
+		var loungePrice = CatalogArticleSupport.centsToAmount(article.path("specialPrice"));
+		int discountPct = article.path("savings").isNumber() ? article.path("savings").asInt()
+				: computeDiscount(originalPrice, loungePrice);
+		String productUrl = resolveProductUrl(article, origin, campaign);
+
+		return new DiscoveredProduct(null, campaign.campaignId(), brand.isBlank() ? "Unknown" : brand, name,
+				inferCategory(name), gender, sizes, originalPrice, loungePrice, discountPct, productUrl,
+				ProductStatus.DISCOVERED, LocalDateTime.now());
+	}
+
+	/**
+	 * Builds the absolute product URL from the article's localized {@code urlPath} (the
+	 * de-CH entry, falling back to any available locale), resolved against the site
+	 * origin. Falls back to the campaign URL when no article path is present.
+	 */
+	private String resolveProductUrl(JsonNode article, String origin, Campaign campaign) {
+		JsonNode urlPath = article.path("urlPath");
+		String rel = urlPath.path(URL_PATH_LANG).asString("").trim();
+		if (rel.isBlank() && urlPath.isObject()) {
+			for (JsonNode value : urlPath) {
+				String candidate = value.asString("").trim();
+				if (!candidate.isBlank()) {
+					rel = candidate;
+					break;
+				}
+			}
+		}
+		if (rel.isBlank()) {
+			return campaign.campaignUrl();
+		}
+		if (rel.startsWith("http://") || rel.startsWith("https://")) {
+			return rel;
+		}
+		return origin + (rel.startsWith("/") ? rel : "/" + rel);
+	}
+
+	private static String firstNonBlank(String... values) {
+		for (String value : values) {
+			if (value != null && !value.isBlank()) {
+				return value;
+			}
+		}
+		return "";
+	}
+
+	private static String origin(String url) {
+		try {
+			var uri = URI.create(url);
+			if (uri.getScheme() != null && uri.getHost() != null) {
+				var origin = new StringBuilder(uri.getScheme()).append("://").append(uri.getHost());
+				if (uri.getPort() > 0) {
+					origin.append(':').append(uri.getPort());
+				}
+				return origin.toString();
+			}
+		}
+		catch (Exception ignored) {
+			// fall through to the default origin
+		}
+		return DEFAULT_ORIGIN;
+	}
+
+	private static Instant parseInstant(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return null;
+		}
+		try {
+			return Instant.parse(raw);
 		}
 		catch (Exception e) {
-			log.debug("No product cards became visible for campaign {} before timeout; continuing: {}", campaignId,
-					e.getMessage());
+			return null;
 		}
-	}
-
-	@SuppressWarnings("unchecked")
-	private DiscoveredProduct parseProductCard(ElementHandle card, Campaign campaign) {
-		// The redesigned listing card uses styled-component hashed class names, so we
-		// read
-		// the few stable hooks (title link, lux-text name span, price markers) in one
-		// in-page evaluation that is resilient to hash churn.
-		var data = (java.util.Map<String, Object>) card.evaluate("""
-				el => {
-				  const a = el.querySelector('a[id$=\"-title-id\"]') || el.querySelector('a[href*=\"/articles/\"]');
-				  const url = a ? a.getAttribute('href') : '';
-				  let brand = '';
-				  if (a) {
-				    const styled = a.querySelector('span');
-				    if (styled) {
-				      brand = Array.from(styled.childNodes)
-				        .filter(n => n.nodeType === 3)
-				        .map(n => n.textContent)
-				        .join('')
-				        .trim();
-				    }
-				  }
-				  const nameEl = el.querySelector('span.lux-text');
-				  const name = nameEl ? nameEl.textContent.trim() : '';
-				  const origEl = el.querySelector('[class*=\"RegularPriceLineThrough\"]');
-				  const original = origEl ? origEl.textContent.trim() : '';
-				  const redEl = el.querySelector('.text-function-100');
-				  const reduced = redEl ? redEl.textContent.trim() : '';
-				  return { brand, name, url, original, reduced };
-				}
-				""");
-
-		var brand = str(data.get("brand"));
-		var name = str(data.get("name"));
-		var url = normalizeUrl("https://www.zalando-lounge.ch", str(data.get("url")));
-		var originalPrice = parsePrice(str(data.get("original")));
-		var loungePrice = parsePrice(str(data.get("reduced")));
-		var discountPct = computeDiscount(originalPrice, loungePrice);
-
-		return new DiscoveredProduct(null, campaign.campaignId(), brand.isEmpty() ? "Unknown" : brand,
-				name.isEmpty() ? "Unknown" : name, inferCategory(name), Gender.UNISEX, List.of(), originalPrice,
-				loungePrice, discountPct, url, ProductStatus.DISCOVERED, LocalDateTime.now());
-	}
-
-	private String str(Object value) {
-		return value == null ? "" : value.toString().trim();
 	}
 
 	private int computeDiscount(BigDecimal originalPrice, BigDecimal loungePrice) {
@@ -340,8 +354,8 @@ class CampaignScraper {
 	}
 
 	/**
-	 * Best-effort category inference from the German product name (listing has no
-	 * category field).
+	 * Best-effort category inference from the (mostly German) product name; the catalog
+	 * listing has no explicit category field usable by the domain filter.
 	 */
 	private Category inferCategory(String name) {
 		if (name == null || name.isBlank()) {
@@ -378,31 +392,6 @@ class CampaignScraper {
 			return Category.BELTS;
 		}
 		return Category.OTHER;
-	}
-
-	private BigDecimal parsePrice(String raw) {
-		if (raw == null || raw.isBlank()) {
-			return BigDecimal.ZERO;
-		}
-		var digits = raw.replaceAll("[^0-9.,]", "").replace(",", ".");
-		try {
-			return new BigDecimal(digits.isEmpty() ? "0" : digits);
-		}
-		catch (NumberFormatException e) {
-			return BigDecimal.ZERO;
-		}
-	}
-
-	private LocalDate parseDate(String raw) {
-		if (raw == null || raw.isBlank()) {
-			return null;
-		}
-		try {
-			return LocalDate.parse(raw.substring(0, 10), DateTimeFormatter.ISO_LOCAL_DATE);
-		}
-		catch (Exception e) {
-			return null;
-		}
 	}
 
 }
