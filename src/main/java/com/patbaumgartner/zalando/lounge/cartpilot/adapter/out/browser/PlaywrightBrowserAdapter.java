@@ -330,15 +330,31 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			payload.put("simpleSku", simpleSku);
 			payload.put("quantity", 1);
 			payload.put("additional", java.util.Map.of("reco", "0"));
-			var response = request.post(properties.zalando().cartApiUrl() + "/items",
+			String cartAddUrl = properties.zalando().cartApiUrl() + "/items";
+			var response = request.post(cartAddUrl,
 					com.microsoft.playwright.options.RequestOptions.create()
 						.setHeader("Content-Type", "application/json")
 						.setHeader("Accept", "application/json")
+						.setHeader("X-Requested-With", "XMLHttpRequest")
+						.setHeader("Origin", origin(productUrl))
+						.setHeader("Referer", productUrl)
 						.setData(objectMapper.writeValueAsString(payload)));
 			try {
 				if (!response.ok()) {
-					log.warn("Cart add API returned status {} for {} (size {})", response.status(), productUrl, size);
-					return false;
+					String responseBody = safeSnippet(response.text());
+					log.warn("Cart add API returned status {} for {} (size {}), endpoint={}, body={}",
+							response.status(), productUrl, size, cartAddUrl, responseBody);
+					if (response.status() == 403) {
+						log.info("Falling back to in-page fetch for {} (size {}) after 403 from request context",
+								productUrl, size);
+						boolean addedViaPage = addToCartViaPageFetch(productUrl, cartAddUrl, payload);
+						if (!addedViaPage) {
+							return false;
+						}
+					}
+					else {
+						return false;
+					}
 				}
 			}
 			finally {
@@ -357,6 +373,66 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			log.error("addToCart failed for {}: {}", productUrl, e.getMessage(), e);
 			return false;
 		}
+	}
+
+	private boolean addToCartViaPageFetch(String productUrl, String cartAddUrl, java.util.Map<String, Object> payload) {
+		try (var page = openPage()) {
+			page.navigate(productUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+			acceptCookieBannerOnce(page);
+
+			@SuppressWarnings("unchecked")
+			var result = (java.util.Map<String, Object>) page.evaluate("""
+					async ({ url, body, referer, origin }) => {
+					  const response = await fetch(url, {
+					    method: 'POST',
+					    credentials: 'include',
+					    headers: {
+					      'Content-Type': 'application/json',
+					      'Accept': 'application/json',
+					      'X-Requested-With': 'XMLHttpRequest',
+					      'Referer': referer,
+					      'Origin': origin
+					    },
+					    body: JSON.stringify(body)
+					  });
+					  let text = '';
+					  try {
+					    text = await response.text();
+					  } catch (_) {
+					    text = '';
+					  }
+					  return {
+					    ok: response.ok,
+					    status: response.status,
+					    body: text
+					  };
+					}
+					""", java.util.Map.of("url", cartAddUrl, "body", payload, "referer", productUrl, "origin",
+					origin(productUrl)));
+
+			boolean ok = Boolean.TRUE.equals(result.get("ok"));
+			Number status = result.get("status") instanceof Number n ? n : Integer.valueOf(-1);
+			String body = safeSnippet(String.valueOf(result.getOrDefault("body", "")));
+			if (!ok) {
+				log.warn("In-page cart add fetch returned status {} for {} (body={})", status.intValue(), productUrl,
+						body);
+				return false;
+			}
+			return true;
+		}
+		catch (Exception e) {
+			log.warn("In-page cart add fallback failed for {}: {}", productUrl, e.getMessage());
+			return false;
+		}
+	}
+
+	private String safeSnippet(String body) {
+		if (body == null) {
+			return "";
+		}
+		String trimmed = body.strip();
+		return trimmed.length() <= 400 ? trimmed : trimmed.substring(0, 400);
 	}
 
 	/**

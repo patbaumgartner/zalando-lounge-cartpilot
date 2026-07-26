@@ -60,7 +60,7 @@ public class CartService {
 	}
 
 	/** Adds a Tier-1 product to the cart and posts an immediate notification. */
-	public void addToCart(FilterResult result) {
+	public boolean addToCart(FilterResult result) {
 		var product = result.product();
 		var profile = result.profile();
 
@@ -72,7 +72,7 @@ public class CartService {
 			log.warn("Could not confirm {} (size {}) in cart — treating as unavailable", product.name(), result.size());
 			reservation.markOutOfStock();
 			reservationPort.save(reservation);
-			return;
+			return false;
 		}
 
 		int expiryMinutes = properties.cart().expiryMinutes();
@@ -88,6 +88,7 @@ public class CartService {
 			.addArgument(() -> profile.name())
 			.addArgument(expiryMinutes)
 			.log("Cart: added {} for {} (expires in {} min)");
+		return true;
 	}
 
 	/** Persists a NOTIFY_ONLY reservation (no browser interaction). */
