@@ -186,12 +186,14 @@ public class CampaignScannerService {
 
 				for (var result : results) {
 					if (result.decision() == Decision.AUTO_RESERVE) {
-						autoReserved++;
+						if (handleResult(result)) {
+							autoReserved++;
+						}
 					}
 					else {
 						notifyOnly++;
+						handleResult(result);
 					}
-					handleResult(result);
 				}
 			}
 
@@ -292,21 +294,21 @@ public class CampaignScannerService {
 		knownBrandPort.upsertAll(brands);
 	}
 
-	private void handleResult(FilterResult result) {
+	private boolean handleResult(FilterResult result) {
 		if (result.decision() == Decision.AUTO_RESERVE) {
 			log.atInfo()
 				.addArgument(() -> result.product().name())
 				.addArgument(() -> result.profile().name())
 				.log("AUTO_RESERVE: {} for {}");
-			cartService.addToCart(result);
+			return cartService.addToCart(result);
 		}
-		else {
-			log.atInfo()
-				.addArgument(() -> result.product().name())
-				.addArgument(() -> result.profile().name())
-				.log("NOTIFY_ONLY: {} for {}");
-			cartService.reserveForNotification(result);
-		}
+
+		log.atInfo()
+			.addArgument(() -> result.product().name())
+			.addArgument(() -> result.profile().name())
+			.log("NOTIFY_ONLY: {} for {}");
+		cartService.reserveForNotification(result);
+		return false;
 	}
 
 }
