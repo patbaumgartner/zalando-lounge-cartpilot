@@ -299,12 +299,24 @@ public class AuthenticationService {
 				// back with a generic "something went wrong" bot-wall error.
 				warmUpAuthPageSensor(page);
 
+				// Check whether the bot-wall already tripped before the form submit.
+				// If so, sleep the indicated wait period and let the retry loop handle
+				// it — retrying immediately would just get the same 403.
+				handleBotWallAlertIfPresent(page);
+
 				// Zalando's bot wall (Akamai) rejects instant value injection with a
 				// generic "something went wrong" error. Drive the form with real
 				// keystrokes/clicks and human-like pauses so the sensor data clears.
 				typeHumanLike(page, EMAIL_SELECTOR, properties.zalando().email());
 				humanPause();
 				clickHumanLike(page, EMAIL_CONTINUE_SELECTOR);
+
+				// The username-lookup API returns 403 "edge_error:halt" when the
+				// Akamai BotManager is still not satisfied. Give the page time to
+				// render the error banner, then surface it as a recoverable failure
+				// so the retry loop can back off and try again.
+				page.waitForTimeout(3000);
+				handleBotWallAlertIfPresent(page);
 
 				// The password step lives in an off-screen, aria-disabled section
 				// until Zalando's backend verifies the email and activates it.
@@ -350,7 +362,14 @@ public class AuthenticationService {
 				}
 
 				if (attempt < loginMaxAttempts) {
-					sleepWithJitter(attempt);
+					// CHALLENGE (bot-wall) failures need longer back-off; all others use
+					// the standard exponential jitter.
+					if (lastCategory == AuthFailureCategory.CHALLENGE) {
+						sleepForBotWallCooldown(attempt);
+					}
+					else {
+						sleepWithJitter(attempt);
+					}
 				}
 			}
 			finally {
@@ -631,9 +650,12 @@ public class AuthenticationService {
 	 * Lets the accounts.zalando.com Akamai sensor observe genuine interaction before the
 	 * email is submitted. That domain runs its own bot manager, independent of the lounge
 	 * homepage warm-up, and rejects the verify-email call with a generic "something went
-	 * wrong" error when the sensor has not yet posted valid telemetry. Waiting for the
-	 * network to settle, moving the mouse, scrolling and dwelling gives the sensor the
-	 * interaction window a real user would produce.
+	 * wrong" error when the sensor has not yet posted valid telemetry.
+	 * <p>
+	 * The 2026-07 unified SSO rollout made this domain's BotManager stricter: the sensor
+	 * needs a longer observation window (≥7 s) with scroll + mouse activity on both
+	 * halves of the dwell period before it clears the fingerprint for the username-lookup
+	 * API call.
 	 */
 	private void warmUpAuthPageSensor(Page page) {
 		try {
@@ -647,7 +669,17 @@ public class AuthenticationService {
 		wanderMouse(page);
 		gentleScroll(page);
 		try {
-			Thread.sleep(ThreadLocalRandom.current().nextLong(2200, 4200));
+			// First half of the dwell — let the sensor post its initial telemetry.
+			Thread.sleep(ThreadLocalRandom.current().nextLong(4000, 6500));
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		wanderMouse(page);
+		gentleScroll(page);
+		try {
+			// Second half — the sensor needs two posting cycles before the API clears.
+			Thread.sleep(ThreadLocalRandom.current().nextLong(3000, 5500));
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -745,6 +777,60 @@ public class AuthenticationService {
 		}
 		catch (InterruptedException interruptedException) {
 			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Akamai's BotManager returns {@code "edge_error":"halt","wait":N} when it rejects
+	 * the username-lookup call. Retrying immediately just re-triggers the block; we must
+	 * wait the indicated cool-down before the next attempt can succeed. We add a small
+	 * random jitter on top to avoid thundering-herd if multiple scan threads ever run.
+	 */
+	private void sleepForBotWallCooldown(int attempt) {
+		// Akamai's indicated wait is typically 60 s. Add per-attempt headroom so
+		// subsequent retries give the sensor progressively more time to mature.
+		long baseWaitMs = 65_000L + (long) (attempt - 1) * 20_000L;
+		long jitter = ThreadLocalRandom.current().nextLong(0, 10_000L);
+		long totalDelayMs = Math.min(120_000L, baseWaitMs + jitter);
+		log.info("Bot-wall cool-down: sleeping {} s before retry {}", totalDelayMs / 1000, attempt + 1);
+		try {
+			Thread.sleep(totalDelayMs);
+		}
+		catch (InterruptedException interruptedException) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Checks whether the Akamai bot-wall error banner is currently visible on the page.
+	 * If a known rejection message is present the method throws a
+	 * {@link LoginFailedException} classified as {@link AuthFailureCategory#CHALLENGE} so
+	 * the caller can apply the appropriate back-off strategy.
+	 * <p>
+	 * Zalando surfaces the rejection inline on the same page (the URL does not change, no
+	 * HTTP error propagates to Playwright), so we must actively poll the DOM.
+	 */
+	private void handleBotWallAlertIfPresent(Page page) {
+		try {
+			var alert = page
+				.locator("[role='alert'], [data-testid*='error'], [data-testid*='notification'], [class*='error' i]")
+				.first();
+			if (!alert.isVisible()) {
+				return;
+			}
+			String text = alert.innerText();
+			if (text != null && (text.contains("hat nicht geklappt") || text.contains("went wrong")
+					|| text.contains("try again") || text.contains("versuche es noch einmal"))) {
+				throw new LoginFailedException(
+						"Bot-wall rejection detected on SSO page (Akamai edge_error:halt): " + text.strip(),
+						AuthFailureCategory.CHALLENGE, null);
+			}
+		}
+		catch (LoginFailedException rethrow) {
+			throw rethrow;
+		}
+		catch (Exception ignored) {
+			// Element lookup failure is non-fatal — proceed with the login flow.
 		}
 	}
 
@@ -862,7 +948,9 @@ public class AuthenticationService {
 			return AuthFailureCategory.NETWORK;
 		}
 		if (message.contains("captcha") || message.contains("challenge") || message.contains("akamai")
-				|| message.contains("access denied") || message.contains("forbidden") || message.contains("waf")) {
+				|| message.contains("access denied") || message.contains("forbidden") || message.contains("waf")
+				|| message.contains("hat nicht geklappt") || message.contains("went wrong")
+				|| message.contains("edge_error") || message.contains("bot-wall")) {
 			return AuthFailureCategory.CHALLENGE;
 		}
 		if (message.contains("invalid") || message.contains("unauthorized") || message.contains("still on login")
