@@ -647,6 +647,19 @@ public class AuthenticationService {
 	}
 
 	/**
+	 * Public entry point for an interactive Akamai BotManager warm-up on an
+	 * already-loaded lounge page. The stockcart basket endpoint is guarded by the same
+	 * BotManager as the SSO flow, so a POST issued before the page's {@code _abck} cookie
+	 * has been promoted to a solved state is rejected with {@code 403 edge_error:halt}.
+	 * The cart-add path calls this so the sensor observes genuine mouse and scroll
+	 * activity — refreshing the shared context cookie — before it adds items to the
+	 * basket.
+	 */
+	public void warmUpBotSensor(Page page) {
+		warmUpAuthPageSensor(page);
+	}
+
+	/**
 	 * Lets the accounts.zalando.com Akamai sensor observe genuine interaction before the
 	 * email is submitted. That domain runs its own bot manager, independent of the lounge
 	 * homepage warm-up, and rejects the verify-email call with a generic "something went
