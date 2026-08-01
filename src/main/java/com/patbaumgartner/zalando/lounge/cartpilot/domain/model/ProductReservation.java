@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * Records one profile's decision for one discovered product. Status machine: PENDING →
- * IN_CART → PURCHASE_INITIATED | REJECTED | EXPIRED PENDING → OUT_OF_STOCK
+ * IN_CART → PURCHASE_INITIATED | REJECTED | EXPIRED PENDING → OUT_OF_STOCK | BLOCKED
  */
 public class ProductReservation {
 
@@ -80,6 +80,14 @@ public class ProductReservation {
 
 	public void markOutOfStock() {
 		this.status = ReservationStatus.OUT_OF_STOCK;
+	}
+
+	/**
+	 * The size was in stock but the shop's bot protection refused the basket call, so
+	 * this stays a live lead for a manual grab rather than a write-off.
+	 */
+	public void markBlocked() {
+		this.status = ReservationStatus.BLOCKED;
 	}
 
 	public boolean isCartExpired() {
