@@ -47,22 +47,26 @@ public class MorningSummaryService {
 	public void sendSummary() {
 		log.atInfo().addArgument(() -> LocalDate.now()).log("Sending morning summary for {}");
 
-		var inCart = reservationPort.findByStatus(ReservationStatus.IN_CART);
-		var notifyOnly = reservationPort.findByStatus(ReservationStatus.PENDING);
-
 		var profileIndex = buildProfileIndex();
 		var productIndex = buildProductIndex(LocalDate.now());
 
-		var autoReserved = toFilterResults(inCart, profileIndex, productIndex);
-		var notifyItems = toFilterResults(notifyOnly, profileIndex, productIndex).stream()
+		// Reserved items are listed with their links too: the hold expires, and once it
+		// does the group still needs a way to reach the product.
+		var autoReserved = toFilterResults(reservationPort.findByStatus(ReservationStatus.IN_CART), profileIndex,
+				productIndex);
+		var blocked = toFilterResults(reservationPort.findByStatus(ReservationStatus.BLOCKED), profileIndex,
+				productIndex);
+		var notifyItems = toFilterResults(reservationPort.findByStatus(ReservationStatus.PENDING), profileIndex,
+				productIndex)
+			.stream()
 			.filter(fr -> fr.decision() == Decision.NOTIFY_ONLY)
 			.toList();
 
 		var campaigns = productPort.findByDiscoveredAt(LocalDate.now());
 		var uniqueCampaigns = campaigns.stream().map(DiscoveredProduct::campaignId).distinct().count();
 
-		notification.sendMorningSummary(
-				new NotificationPort.MorningSummary(LocalDate.now(), autoReserved, notifyItems, (int) uniqueCampaigns));
+		notification.sendMorningSummary(new NotificationPort.MorningSummary(LocalDate.now(), autoReserved, blocked,
+				notifyItems, (int) uniqueCampaigns));
 	}
 
 	// ── Helpers ────────────────────────────────────────────────

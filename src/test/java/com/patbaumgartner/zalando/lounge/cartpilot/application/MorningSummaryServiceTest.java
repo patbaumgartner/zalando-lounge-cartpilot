@@ -56,6 +56,7 @@ class MorningSummaryServiceTest {
 		@Test
 		@DisplayName("sends summary with zero counts when no reservations exist")
 		void sendsEmptySummary() {
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of());
 			when(profilePort.findAll()).thenReturn(List.of());
@@ -85,6 +86,7 @@ class MorningSummaryServiceTest {
 			var product = ProductTestData.mammutJacket();
 			var inCart = ReservationTestData.inCartReservation();
 
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(inCart));
 			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of());
 			when(profilePort.findAll()).thenReturn(List.of(profile));
@@ -100,12 +102,39 @@ class MorningSummaryServiceTest {
 		}
 
 		@Test
+		@DisplayName("includes BLOCKED reservations so bot-walled items stay reachable")
+		void includesBlockedReservations() {
+			var profile = ProfileTestData.aProfile().withId(1L).build();
+			var product = ProductTestData.mammutJacket();
+			var blocked = ReservationTestData.aReservation()
+				.withProductId(product.id())
+				.withProfileId(profile.id())
+				.withStatus(ReservationStatus.BLOCKED)
+				.build();
+
+			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of());
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of(blocked));
+			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of());
+			when(profilePort.findAll()).thenReturn(List.of(profile));
+			when(productPort.findByDiscoveredAt(any(LocalDate.class))).thenReturn(List.of(product));
+
+			service.sendSummary();
+
+			var captor = ArgumentCaptor.forClass(NotificationPort.MorningSummary.class);
+			verify(notification).sendMorningSummary(captor.capture());
+
+			assertThat(captor.getValue().blocked()).hasSize(1);
+			assertThat(captor.getValue().autoReserved()).isEmpty();
+		}
+
+		@Test
 		@DisplayName("counts unique campaign IDs for campaign count")
 		void countsUniqueCampaigns() {
 			var product1 = ProductTestData.aProduct().withId(1L).withCampaignId("camp-A").build();
 			var product2 = ProductTestData.aProduct().withId(2L).withCampaignId("camp-A").build();
 			var product3 = ProductTestData.aProduct().withId(3L).withCampaignId("camp-B").build();
 
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of());
 			when(profilePort.findAll()).thenReturn(List.of());
@@ -132,6 +161,7 @@ class MorningSummaryServiceTest {
 				.withStatus(ReservationStatus.PENDING)
 				.build();
 
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of());
 			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of(notifyReservation));
 			when(profilePort.findAll()).thenReturn(List.of(profile));

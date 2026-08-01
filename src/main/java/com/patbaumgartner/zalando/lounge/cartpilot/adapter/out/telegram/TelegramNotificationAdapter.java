@@ -17,6 +17,8 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
+import java.util.List;
+
 /**
  * Sends messages to the Telegram group via the bot.
  */
@@ -90,20 +92,37 @@ public class TelegramNotificationAdapter implements NotificationPort {
 
 	@Override
 	public void sendGroupMessage(String text) {
+		for (var chunk : TelegramMessageFormatter.splitForTelegram(text)) {
+			sendChunk(chunk);
+		}
+	}
+
+	@Override
+	public void sendProductLinks(String heading, List<ProductLink> entries) {
+		sendGroupMessage(formatter.productLinks(heading, entries));
+	}
+
+	@Override
+	public void sendScanReport(ScanReport report) {
+		sendGroupMessage(formatter.scanReport(report));
+	}
+
+	// ── Helpers ────────────────────────────────────────────────
+
+	private void sendChunk(String text) {
 		var message = SendMessage.builder()
 			.chatId(properties.telegram().groupChatId())
 			.text(text)
 			.parseMode(ParseMode.HTML)
+			.disableWebPagePreview(true)
 			.build();
 		try {
 			sender.execute(message);
 		}
 		catch (TelegramApiException e) {
-			log.error("Failed to send group message: {}", e.getMessage(), e);
+			log.error("Failed to send group message ({} chars): {}", text.length(), e.getMessage(), e);
 		}
 	}
-
-	// ── Helpers ────────────────────────────────────────────────
 
 	private InlineKeyboardButton button(String label, String callbackData) {
 		return InlineKeyboardButton.builder().text(label).callbackData(callbackData).build();
