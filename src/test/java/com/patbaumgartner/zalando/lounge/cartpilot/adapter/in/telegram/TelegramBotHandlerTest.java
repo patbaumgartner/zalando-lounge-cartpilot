@@ -3,16 +3,24 @@ package com.patbaumgartner.zalando.lounge.cartpilot.adapter.in.telegram;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.CampaignScannerService;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.CartService;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.ProfileManagementService;
+import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.BrandTier;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Category;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Decision;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductReservation;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProductReservationPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ProductTestData;
 import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ProfileTestData;
+import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ReservationTestData;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -28,13 +36,18 @@ import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -59,6 +72,9 @@ class TelegramBotHandlerTest {
 	private DiscoveredProductPort productPort;
 
 	@Mock
+	private NotificationPort notification;
+
+	@Mock
 	private TelegramClient telegramClient;
 
 	private TelegramBotHandler handler;
@@ -69,7 +85,17 @@ class TelegramBotHandlerTest {
 			.execute(any(GetChatMember.class));
 
 		handler = new TelegramBotHandler(telegramClient, cartService, scannerService, profileService, reservationPort,
-				productPort);
+				productPort, notification, testProperties());
+	}
+
+	private static CartPilotProperties testProperties() {
+		var zalando = new CartPilotProperties.ZalandoProperties("mail@example.ch", "secret", "session/state.json",
+				"https://www.zalando-lounge.ch", "https://www.zalando-lounge.ch/event", 60, 5, 60000, 30000, 3, true,
+				false, 240000, false, 12000, 60000, 30000, 1000, 1, false, "diagnostics/auth",
+				"ws://patchright:3000/cartpilot");
+		return new CartPilotProperties(zalando, new CartPilotProperties.TelegramProperties("token", "-100123"),
+				new CartPilotProperties.CartProperties(20, 15, 2), new CartPilotProperties.SchedulerProperties(
+						"0 0 6 * * *", "0 10 6 * * *", "0 */15 * * * *", "Europe/Zurich"));
 	}
 
 	// ── Helpers ────────────────────────────────────────────────
@@ -237,6 +263,73 @@ class TelegramBotHandlerTest {
 			handler.onUpdateReceived(groupTextUpdate("/help"));
 
 			assertSentMessageContains("CartPilot Commands");
+		}
+
+		@Test
+		@DisplayName("/links posts a link list per open status")
+		void linksCommandPostsLinkLists() {
+			var product = ProductTestData.mammutJacket();
+			var profile = ProfileTestData.aProfile().withId(1L).build();
+			var blocked = ReservationTestData.aReservation()
+				.withProductId(product.id())
+				.withProfileId(profile.id())
+				.withStatus(ReservationStatus.BLOCKED)
+				.build();
+
+			when(profileService.listAll()).thenReturn(List.of(profile));
+			when(reservationPort.findByStatus(any())).thenReturn(List.of());
+			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of(blocked));
+			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
+
+			handler.onUpdateReceived(groupTextUpdate("/links"));
+
+			var captor = ArgumentCaptor.forClass(List.class);
+			verify(notification).sendProductLinks(contains("Blocked"), captor.capture());
+			assertThat(captor.getValue()).hasSize(1);
+		}
+
+		@Test
+		@DisplayName("/links reports an empty state when nothing is open")
+		void linksCommandReportsEmptyState() {
+			when(profileService.listAll()).thenReturn(List.of());
+			when(reservationPort.findByStatus(any())).thenReturn(List.of());
+
+			handler.onUpdateReceived(groupTextUpdate("/links"));
+
+			verify(notification).sendGroupMessage(contains("No open items"));
+			verify(notification, never()).sendProductLinks(anyString(), anyList());
+		}
+
+		@Test
+		@DisplayName("/links skips reservations left over from previous days")
+		void linksCommandSkipsStaleReservations() {
+			var product = ProductTestData.mammutJacket();
+			var profile = ProfileTestData.aProfile().withId(1L).build();
+			var stale = new ProductReservation(9L, product.id(), profile.id(), "52", Decision.NOTIFY_ONLY,
+					ReservationStatus.PENDING, 30, null, null, null, LocalDateTime.now().minusDays(3));
+
+			when(profileService.listAll()).thenReturn(List.of(profile));
+			when(reservationPort.findByStatus(any())).thenReturn(List.of());
+			when(reservationPort.findByStatus(ReservationStatus.PENDING)).thenReturn(List.of(stale));
+
+			handler.onUpdateReceived(groupTextUpdate("/links"));
+
+			verify(notification).sendGroupMessage(contains("No open items"));
+			verify(notification, never()).sendProductLinks(anyString(), anyList());
+		}
+
+		@Test
+		@DisplayName("/debug reports reservation counts and the live config")
+		void debugCommandReportsDiagnostics() throws TelegramApiException {
+			when(reservationPort.findByStatus(any())).thenReturn(List.of());
+			when(productPort.findByDiscoveredAt(any())).thenReturn(List.of());
+
+			handler.onUpdateReceived(groupTextUpdate("/debug"));
+
+			assertSentMessageContains("Debug");
+			assertSentMessageContains("BLOCKED");
+			assertSentMessageContains("ws://patchright:3000/cartpilot");
+			assertSentMessageContains("Europe/Zurich");
 		}
 
 	}
