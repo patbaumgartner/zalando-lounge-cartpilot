@@ -2,6 +2,8 @@ package com.patbaumgartner.zalando.lounge.cartpilot.application;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.BrandTier;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddOutcome;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Decision;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.FilterResult;
@@ -80,14 +82,16 @@ class CartServiceTest {
 			var result = autoReserveResult(product, profile, "52", 70);
 			var saved = ReservationTestData.inCartReservation();
 
-			when(browser.addToCart(anyString(), anyString())).thenReturn(true);
+			when(browser.addToCart(anyString(), anyString())).thenReturn(CartAddResult.added());
 			when(reservationPort.save(any())).thenReturn(saved);
 			when(notification.sendReservationNotification(any(), any(), any())).thenReturn(99);
 
 			// When
-			cartService.addToCart(result);
+			var outcome = cartService.addToCart(result);
 
 			// Then
+			assertThat(outcome.outcome()).isEqualTo(CartAddOutcome.ADDED);
+
 			var reservationCaptor = ArgumentCaptor.forClass(ProductReservation.class);
 			verify(reservationPort).save(reservationCaptor.capture());
 			assertThat(reservationCaptor.getValue().status()).isEqualTo(ReservationStatus.IN_CART);
@@ -99,23 +103,52 @@ class CartServiceTest {
 		}
 
 		@Test
-		@DisplayName("saves OUT_OF_STOCK reservation when browser reports item unavailable")
-		void savesOutOfStockWhenBrowserFails() {
+		@DisplayName("saves OUT_OF_STOCK reservation when the size is no longer purchasable")
+		void savesOutOfStockWhenSizeGone() {
 			// Given
 			var product = ProductTestData.mammutJacket();
 			var profile = ProfileTestData.pat();
 			var result = autoReserveResult(product, profile, "52", 70);
 
-			when(browser.addToCart(anyString(), anyString())).thenReturn(false);
+			when(browser.addToCart(anyString(), anyString()))
+				.thenReturn(CartAddResult.sizeUnavailable("size 52 not purchasable"));
 			when(reservationPort.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
 			// When
-			cartService.addToCart(result);
+			var outcome = cartService.addToCart(result);
 
 			// Then
+			assertThat(outcome.outcome()).isEqualTo(CartAddOutcome.SIZE_UNAVAILABLE);
+
 			var captor = ArgumentCaptor.forClass(ProductReservation.class);
 			verify(reservationPort).save(captor.capture());
 			assertThat(captor.getValue().status()).isEqualTo(ReservationStatus.OUT_OF_STOCK);
+
+			verifyNoInteractions(notification);
+		}
+
+		@Test
+		@DisplayName("saves BLOCKED reservation when bot protection refuses the basket call")
+		void savesBlockedWhenBotProtectionRefuses() {
+			// Given
+			var product = ProductTestData.mammutJacket();
+			var profile = ProfileTestData.pat();
+			var result = autoReserveResult(product, profile, "52", 70);
+
+			when(browser.addToCart(anyString(), anyString()))
+				.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+			when(reservationPort.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+			// When
+			var outcome = cartService.addToCart(result);
+
+			// Then
+			assertThat(outcome.outcome()).isEqualTo(CartAddOutcome.BLOCKED);
+			assertThat(outcome.httpStatus()).isEqualTo(403);
+
+			var captor = ArgumentCaptor.forClass(ProductReservation.class);
+			verify(reservationPort).save(captor.capture());
+			assertThat(captor.getValue().status()).isEqualTo(ReservationStatus.BLOCKED);
 
 			verifyNoInteractions(notification);
 		}

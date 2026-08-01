@@ -42,8 +42,8 @@ class PlaywrightBrowserAdapterE2ETest {
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
 
-			boolean added = adapter.addToCart(server.productUrl(), "52");
-			assertThat(added).isTrue();
+			var added = adapter.addToCart(server.productUrl(), "52");
+			assertThat(added.isAdded()).isTrue();
 			assertThat(server.cartCount()).isEqualTo(1);
 			assertThat(adapter.isItemInCart(server.productUrl())).isTrue();
 
@@ -87,13 +87,13 @@ class PlaywrightBrowserAdapterE2ETest {
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
 
-			assertThat(adapter.addToCart(server.productUrl(), "52")).isTrue();
+			assertThat(adapter.addToCart(server.productUrl(), "52").isAdded()).isTrue();
 			assertThat(server.removeCount()).isZero();
 			assertThat(server.addCount()).isEqualTo(1);
 
-			boolean refreshed = adapter.refreshCartItem(server.productUrl(), "52");
+			var refreshed = adapter.refreshCartItem(server.productUrl(), "52");
 
-			assertThat(refreshed).isTrue();
+			assertThat(refreshed.isAdded()).isTrue();
 			// The refresh issued exactly one DELETE and one re-add against the basket.
 			assertThat(server.removeCount()).isEqualTo(1);
 			assertThat(server.addCount()).isEqualTo(2);
@@ -114,7 +114,7 @@ class PlaywrightBrowserAdapterE2ETest {
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
 
-			assertThat(adapter.addToCart(server.productUrl(), "52")).isTrue();
+			assertThat(adapter.addToCart(server.productUrl(), "52").isAdded()).isTrue();
 
 			adapter.removeFromCart(server.productUrl());
 

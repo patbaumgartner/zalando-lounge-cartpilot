@@ -72,17 +72,17 @@ class PlaywrightBrowserAdapterLiveTest {
 
 			// 1) Add to cart.
 			Instant addedAt = Instant.now();
-			boolean added = adapter.addToCart(productUrl, size);
-			log("addToCart -> " + added);
-			assumeTrue(added, "Could not add the article (sold out between scan and add) \u2014 skipping");
+			var added = adapter.addToCart(productUrl, size);
+			log("addToCart -> " + added.describe());
+			assumeTrue(added.isAdded(), "Could not add the article (sold out between scan and add) \u2014 skipping");
 			assertThat(adapter.isItemInCart(productUrl)).as("item present right after add").isTrue();
 
 			// 2) Keep-alive refresh: remove + re-add. This is the basket mutation that
 			// resets Zalando's server-side reservation timer.
-			boolean refreshed = adapter.refreshCartItem(productUrl, size);
+			var refreshed = adapter.refreshCartItem(productUrl, size);
 			Duration sinceAdd = Duration.between(addedAt, Instant.now());
-			log("refreshCartItem -> " + refreshed + " (" + sinceAdd.toSeconds() + "s after add)");
-			assertThat(refreshed).as("item re-added during keep-alive refresh").isTrue();
+			log("refreshCartItem -> " + refreshed.describe() + " (" + sinceAdd.toSeconds() + "s after add)");
+			assertThat(refreshed.isAdded()).as("item re-added during keep-alive refresh").isTrue();
 			assertThat(adapter.isItemInCart(productUrl)).as("item still present after refresh").isTrue();
 
 			// 3) Clear the cart via the stockcart API.
