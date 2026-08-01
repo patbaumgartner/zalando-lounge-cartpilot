@@ -13,6 +13,7 @@ import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Gender;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductDetails;
@@ -201,7 +202,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	 * can fall back to rendering.
 	 */
 	private ProductDetails fetchProductDetailsViaApi(String productUrl) {
-		JsonNode article = fetchArticleNode(productUrl);
+		JsonNode article = fetchArticle(productUrl).article();
 		if (article == null) {
 			return null;
 		}
@@ -210,16 +211,31 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
+	 * An article lookup with the HTTP status that produced it, so a 403 bot wall can be
+	 * told apart from a genuinely missing article.
+	 */
+	private record ArticleFetch(JsonNode article, int status) {
+
+		static ArticleFetch failed(int status) {
+			return new ArticleFetch(null, status);
+		}
+
+		boolean isBotWall() {
+			return status == 403;
+		}
+	}
+
+	/**
 	 * Fetches a single article's catalog JSON
 	 * ({@code /api/phoenix/catalog/events/{campaignId}/articles/{sku}}) through the
-	 * authenticated request context, retrying on 429. Returns {@code null} when the id
-	 * could not be derived or the request failed.
+	 * authenticated request context, retrying on 429. The returned article is
+	 * {@code null} when the id could not be derived or the request failed.
 	 */
-	private JsonNode fetchArticleNode(String productUrl) {
+	private ArticleFetch fetchArticle(String productUrl) {
 		String campaignId = campaignId(productUrl);
 		String sku = articleId(productUrl);
 		if (campaignId == null || sku == null) {
-			return null;
+			return ArticleFetch.failed(0);
 		}
 		String apiUrl = origin(productUrl) + "/api/phoenix/catalog/events/" + campaignId + "/articles/" + sku;
 		var request = connectedRequestContext();
@@ -233,7 +249,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 						if (attempt == SIZE_API_RATE_LIMIT_RETRIES) {
 							log.warn("Article request still rate-limited (429) after {} retries for {}",
 									SIZE_API_RATE_LIMIT_RETRIES, apiUrl);
-							return null;
+							return ArticleFetch.failed(429);
 						}
 						long backoff = SIZE_API_RETRY_BACKOFF_MS * (1L << attempt);
 						log.debug("Rate-limited (429) on {}; retrying in {} ms (attempt {}/{})", apiUrl, backoff,
@@ -243,10 +259,11 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 					}
 					if (!response.ok()) {
 						log.warn("Article request returned status {} for {}", response.status(), apiUrl);
-						return null;
+						return ArticleFetch.failed(response.status());
 					}
 					JsonNode article = objectMapper.readTree(response.text());
-					return article.isObject() ? article : null;
+					return article.isObject() ? new ArticleFetch(article, response.status())
+							: ArticleFetch.failed(response.status());
 				}
 				finally {
 					// Free the buffered response body in the Playwright driver; otherwise
@@ -255,15 +272,15 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 					response.dispose();
 				}
 			}
-			return null;
+			return ArticleFetch.failed(0);
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			return null;
+			return ArticleFetch.failed(0);
 		}
 		catch (Exception e) {
 			log.debug("Could not read article detail for {}: {}", apiUrl, e.getMessage());
-			return null;
+			return ArticleFetch.failed(0);
 		}
 	}
 
@@ -316,27 +333,30 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public boolean addToCart(String productUrl, String size) {
+	public CartAddResult addToCart(String productUrl, String size) {
 		try {
 			String campaignId = campaignId(productUrl);
 			String configSku = articleId(productUrl);
 			if (campaignId == null || configSku == null) {
 				log.warn("Could not derive campaign/article id for cart add: {}", productUrl);
-				return false;
+				return CartAddResult.failed(0, "unrecognised product URL");
 			}
 
 			// The article's per-size stockcart sku ("simpleSku") is required by the
 			// basket API; look it up from the authoritative catalog detail so a size sold
 			// out since discovery is caught here rather than added blindly.
-			JsonNode article = fetchArticleNode(productUrl);
-			if (article == null) {
-				log.warn("Could not load article detail for cart add: {}", productUrl);
-				return false;
+			var articleFetch = fetchArticle(productUrl);
+			if (articleFetch.article() == null) {
+				log.warn("Could not load article detail for cart add: {} (status {})", productUrl,
+						articleFetch.status());
+				return articleFetch.isBotWall()
+						? CartAddResult.blocked(articleFetch.status(), "bot protection refused the article lookup")
+						: CartAddResult.failed(articleFetch.status(), "article detail unavailable");
 			}
-			String simpleSku = simpleSkuForSize(article.path("simples"), size);
+			String simpleSku = simpleSkuForSize(articleFetch.article().path("simples"), size);
 			if (simpleSku == null) {
 				log.warn("Size '{}' not available on {} — cannot add to cart", size, productUrl);
-				return false;
+				return CartAddResult.sizeUnavailable("size " + size + " not purchasable");
 			}
 
 			// The stockcart basket endpoint is guarded by Akamai BotManager. A POST
@@ -368,14 +388,14 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				status = postCartItem(request, cartAddUrl, payload, productUrl, size);
 			}
 			if (status < 200 || status >= 300) {
-				if (status == 403) {
-					log.info("Direct cart add still 403 for {} (size {}); trying warmed in-page add", productUrl, size);
-					if (!addToCartViaPageFetch(productUrl, cartAddUrl, payload)) {
-						return false;
-					}
+				if (status != 403) {
+					return CartAddResult.failed(status, "basket API rejected the add");
 				}
-				else {
-					return false;
+				log.info("Direct cart add still 403 for {} (size {}); trying warmed in-page add", productUrl, size);
+				int fallbackStatus = addToCartViaPageFetch(productUrl, cartAddUrl, payload);
+				if (fallbackStatus < 200 || fallbackStatus >= 300) {
+					return CartAddResult.blocked(fallbackStatus > 0 ? fallbackStatus : status,
+							"bot protection refused the basket call");
 				}
 			}
 
@@ -385,15 +405,19 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				.addArgument(size)
 				.addArgument(inCart)
 				.log("addToCart result for {} (size {}): inCart={}");
-			return inCart;
+			return inCart ? CartAddResult.added() : CartAddResult.failed(status, "basket did not confirm the item");
 		}
 		catch (Exception e) {
 			log.error("addToCart failed for {}: {}", productUrl, e.getMessage(), e);
-			return false;
+			return CartAddResult.failed(0, e.getMessage());
 		}
 	}
 
-	private boolean addToCartViaPageFetch(String productUrl, String cartAddUrl, java.util.Map<String, Object> payload) {
+	/**
+	 * Replays the basket POST from inside a warmed article page. Returns the HTTP status
+	 * of that fetch, or {@code -1} when the page could not run it at all.
+	 */
+	private int addToCartViaPageFetch(String productUrl, String cartAddUrl, java.util.Map<String, Object> payload) {
 		try (var page = openPage()) {
 			page.navigate(productUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
@@ -438,13 +462,12 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			if (!ok) {
 				log.warn("In-page cart add fetch returned status {} for {} (body={})", status.intValue(), productUrl,
 						body);
-				return false;
 			}
-			return true;
+			return status.intValue();
 		}
 		catch (Exception e) {
 			log.warn("In-page cart add fallback failed for {}: {}", productUrl, e.getMessage());
-			return false;
+			return -1;
 		}
 	}
 
@@ -619,21 +642,21 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public boolean refreshCartItem(String productUrl, String size) {
+	public CartAddResult refreshCartItem(String productUrl, String size) {
 		try {
 			// Removing and re-adding the article mutates the basket, which resets
 			// Zalando's server-side reservation timer — a plain presence check does not.
 			// This is what genuinely prolongs the cart hold during keep-alive.
 			removeFromCart(productUrl);
-			boolean readded = addToCart(productUrl, size);
-			if (!readded) {
-				log.warn("Keep-alive refresh could not re-add {} (size {}); likely sold out", productUrl, size);
+			var readded = addToCart(productUrl, size);
+			if (!readded.isAdded()) {
+				log.warn("Keep-alive refresh could not re-add {} (size {}): {}", productUrl, size, readded.describe());
 			}
 			return readded;
 		}
 		catch (Exception e) {
 			log.error("refreshCartItem failed for {}: {}", productUrl, e.getMessage(), e);
-			return false;
+			return CartAddResult.failed(0, e.getMessage());
 		}
 	}
 

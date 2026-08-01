@@ -1,10 +1,12 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.application;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Decision;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.FilterResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductReservation;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.PurchasedItem;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
@@ -59,20 +61,32 @@ public class CartService {
 		this.properties = properties;
 	}
 
-	/** Adds a Tier-1 product to the cart and posts an immediate notification. */
-	public boolean addToCart(FilterResult result) {
+	/**
+	 * Adds a Tier-1 product to the cart and posts an immediate notification. A bot-wall
+	 * rejection is recorded as {@link ReservationStatus#BLOCKED} rather than sold out, so
+	 * the item stays on the link list for a manual grab.
+	 */
+	public CartAddResult addToCart(FilterResult result) {
 		var product = result.product();
 		var profile = result.profile();
 
 		var reservation = ProductReservation.pending(product.id(), profile.id(), result.size(), Decision.AUTO_RESERVE,
 				result.score());
 
-		boolean added = browser.addToCart(product.productUrl(), result.size());
-		if (!added) {
-			log.warn("Could not confirm {} (size {}) in cart — treating as unavailable", product.name(), result.size());
-			reservation.markOutOfStock();
+		var addResult = browser.addToCart(product.productUrl(), result.size());
+		if (!addResult.isAdded()) {
+			if (addResult.isBlocked()) {
+				log.warn("Bot protection blocked {} (size {}) — {}", product.name(), result.size(),
+						addResult.describe());
+				reservation.markBlocked();
+			}
+			else {
+				log.warn("Could not confirm {} (size {}) in cart — {}", product.name(), result.size(),
+						addResult.describe());
+				reservation.markOutOfStock();
+			}
 			reservationPort.save(reservation);
-			return false;
+			return addResult;
 		}
 
 		int expiryMinutes = properties.cart().expiryMinutes();
@@ -88,7 +102,7 @@ public class CartService {
 			.addArgument(() -> profile.name())
 			.addArgument(expiryMinutes)
 			.log("Cart: added {} for {} (expires in {} min)");
-		return true;
+		return addResult;
 	}
 
 	/** Persists a NOTIFY_ONLY reservation (no browser interaction). */
@@ -165,8 +179,7 @@ public class CartService {
 	 */
 	public ClearCartResult clearCart(String actorUsername) {
 		int browserRemoved = browser.clearCart();
-		var inCartReservations = reservationPort
-			.findByStatus(com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus.IN_CART);
+		var inCartReservations = reservationPort.findByStatus(ReservationStatus.IN_CART);
 
 		int updatedReservations = 0;
 		for (var reservation : inCartReservations) {

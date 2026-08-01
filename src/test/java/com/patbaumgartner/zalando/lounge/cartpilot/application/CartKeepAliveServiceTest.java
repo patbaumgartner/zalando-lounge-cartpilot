@@ -1,17 +1,21 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.application;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProductReservationPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProfilePort;
 import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ProductTestData;
+import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ProfileTestData;
 import com.patbaumgartner.zalando.lounge.cartpilot.testdata.ReservationTestData;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -22,7 +26,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -38,6 +44,9 @@ class CartKeepAliveServiceTest {
 	private DiscoveredProductPort productPort;
 
 	@Mock
+	private ProfilePort profilePort;
+
+	@Mock
 	private BrowserPort browser;
 
 	@Mock
@@ -48,7 +57,8 @@ class CartKeepAliveServiceTest {
 	@BeforeEach
 	void setUp() {
 		var props = buildProperties(2, 20);
-		keepAliveService = new CartKeepAliveService(reservationPort, productPort, browser, notification, props);
+		keepAliveService = new CartKeepAliveService(reservationPort, productPort, profilePort, browser, notification,
+				props);
 	}
 
 	@Test
@@ -69,7 +79,7 @@ class CartKeepAliveServiceTest {
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(browser.refreshCartItem(product.productUrl(), reservation.size())).thenReturn(true);
+		when(browser.refreshCartItem(product.productUrl(), reservation.size())).thenReturn(CartAddResult.added());
 
 		keepAliveService.keepAlive();
 
@@ -81,20 +91,46 @@ class CartKeepAliveServiceTest {
 	}
 
 	@Test
-	@DisplayName("marks EXPIRED and notifies when the item can no longer be re-added")
+	@DisplayName("marks EXPIRED and posts a link list when the item can no longer be re-added")
 	void expiresWhenItemCannotBeRefreshed() {
 		var reservation = ReservationTestData.inCartReservation();
 		var product = ProductTestData.mammutJacket();
+		var profile = ProfileTestData.aProfile().withId(reservation.profileId()).build();
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(browser.refreshCartItem(eq(product.productUrl()), any())).thenReturn(false);
+		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(browser.refreshCartItem(eq(product.productUrl()), any()))
+			.thenReturn(CartAddResult.sizeUnavailable("size 52 not purchasable"));
 
 		keepAliveService.keepAlive();
 
 		assertThat(reservation.status()).isEqualTo(ReservationStatus.EXPIRED);
 		verify(reservationPort).update(reservation);
-		verify(notification).sendGroupMessage(anyString());
+
+		var captor = ArgumentCaptor.forClass(List.class);
+		verify(notification).sendProductLinks(contains("ran out"), captor.capture());
+		assertThat(captor.getValue()).hasSize(1);
+	}
+
+	@Test
+	@DisplayName("keeps the reservation IN_CART and reports it when bot protection blocks the refresh")
+	void keepsReservationWhenRefreshIsBlocked() {
+		var reservation = ReservationTestData.inCartReservation();
+		var product = ProductTestData.mammutJacket();
+		var profile = ProfileTestData.aProfile().withId(reservation.profileId()).build();
+
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
+		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(browser.refreshCartItem(eq(product.productUrl()), any()))
+			.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+
+		keepAliveService.keepAlive();
+
+		assertThat(reservation.status()).isEqualTo(ReservationStatus.IN_CART);
+		verify(reservationPort, never()).update(reservation);
+		verify(notification).sendProductLinks(contains("blocked"), anyList());
 	}
 
 	// ── Helpers ────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductDetails;
 
@@ -28,10 +29,11 @@ public interface BrowserPort {
 	ProductDetails fetchProductDetails(String productUrl);
 
 	/**
-	 * Navigates to the product URL, selects the given size, and clicks "Add to cart".
-	 * Returns true when the cart badge confirms success.
+	 * Adds the given size of the product to the basket and confirms it landed there.
+	 * Reports <em>why</em> an add failed so a bot-wall rejection is not mistaken for a
+	 * sold-out size.
 	 */
-	boolean addToCart(String productUrl, String size);
+	CartAddResult addToCart(String productUrl, String size);
 
 	/** Removes an item identified by its product URL from the cart. */
 	void removeFromCart(String productUrl);
@@ -50,10 +52,10 @@ public interface BrowserPort {
 	 * Refreshes a cart reservation by removing the item and immediately re-adding it.
 	 * Mutating the basket resets Zalando's server-side reservation timer, which a
 	 * read-only presence check does not — this is what actually prolongs the hold during
-	 * keep-alive. Returns true when the item is back in the cart afterwards, or false
-	 * when it could not be re-added (e.g. it sold out in the meantime).
+	 * keep-alive. The result distinguishes a sold-out article (the hold is genuinely
+	 * gone) from a bot-wall rejection (the hold may well still stand).
 	 */
-	boolean refreshCartItem(String productUrl, String size);
+	CartAddResult refreshCartItem(String productUrl, String size);
 
 	/** Verifies the session is still alive; re-authenticates if needed. */
 	void ensureAuthenticated();
