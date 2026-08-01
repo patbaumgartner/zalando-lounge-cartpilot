@@ -3,12 +3,17 @@ package com.patbaumgartner.zalando.lounge.cartpilot.adapter.in.telegram;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.CampaignScannerService;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.CartService;
 import com.patbaumgartner.zalando.lounge.cartpilot.application.ProfileManagementService;
+import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.BrandTier;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Category;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductReservation;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Profile;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProductReservationPort;
+import com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.telegram.TelegramMessageFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -25,12 +30,18 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Handles all inbound Telegram updates: text commands + inline button callbacks.
  *
- * Commands (UC-07): /status, /scan, /clear, /profiles, /profile …, /help
+ * Commands (UC-07): /status, /links, /debug, /scan, /clear, /profiles, /profile …, /help
  *
  * Callbacks: buy:<reservationId>, skip:<reservationId>, view:<reservationId>
  */
@@ -52,15 +63,22 @@ public class TelegramBotHandler {
 
 	private final DiscoveredProductPort productPort;
 
+	private final NotificationPort notification;
+
+	private final CartPilotProperties properties;
+
 	public TelegramBotHandler(TelegramClient telegramClient, CartService cartService,
 			CampaignScannerService scannerService, ProfileManagementService profileService,
-			ProductReservationPort reservationPort, DiscoveredProductPort productPort) {
+			ProductReservationPort reservationPort, DiscoveredProductPort productPort, NotificationPort notification,
+			CartPilotProperties properties) {
 		this.telegramClient = telegramClient;
 		this.cartService = cartService;
 		this.scannerService = scannerService;
 		this.profileService = profileService;
 		this.reservationPort = reservationPort;
 		this.productPort = productPort;
+		this.notification = notification;
+		this.properties = properties;
 	}
 
 	public void onUpdateReceived(Update update) {
@@ -95,6 +113,12 @@ public class TelegramBotHandler {
 			}
 			else if (text.startsWith("/status")) {
 				replySender.send(buildStatusText());
+			}
+			else if (text.startsWith("/links")) {
+				sendLinkLists();
+			}
+			else if (text.startsWith("/debug")) {
+				replySender.send(buildDebugText());
 			}
 			else if (text.startsWith("/profiles") && isAdmin) {
 				replySender.send(buildProfilesText());
@@ -242,6 +266,95 @@ public class TelegramBotHandler {
 
 	// ── Formatting helpers ─────────────────────────────────────
 
+	private void sendLinkLists() {
+		var profileNames = profileNameIndex();
+		var inCart = linksFor(ReservationStatus.IN_CART, profileNames, "in cart");
+		var blocked = linksFor(ReservationStatus.BLOCKED, profileNames, "bot protection refused the add");
+		var pending = linksFor(ReservationStatus.PENDING, profileNames, "notify only");
+
+		if (inCart.isEmpty() && blocked.isEmpty() && pending.isEmpty()) {
+			notification.sendGroupMessage("📭 No open items right now. Run /scan to look for new ones.");
+			return;
+		}
+
+		if (!inCart.isEmpty()) {
+			notification.sendProductLinks("Reserved — links stay valid after the hold expires", inCart);
+		}
+		if (!blocked.isEmpty()) {
+			notification.sendProductLinks("Blocked by bot protection — grab these manually", blocked);
+		}
+		if (!pending.isEmpty()) {
+			notification.sendProductLinks("Matched, notify only", pending);
+		}
+	}
+
+	private List<NotificationPort.ProductLink> linksFor(ReservationStatus status, Map<Long, String> profileNames,
+			String note) {
+		var entries = new ArrayList<NotificationPort.ProductLink>();
+		for (var reservation : reservationPort.findByStatus(status)) {
+			// Reservations are never purged, so without a date bound the list would grow
+			// with every past scan and bury today's actually-buyable items.
+			if (!isFromToday(reservation)) {
+				continue;
+			}
+			productPort.findById(reservation.productId())
+				.ifPresent(product -> entries.add(NotificationPort.ProductLink.of(reservation,
+						profileNames.getOrDefault(reservation.profileId(), "unknown"), product,
+						noteFor(reservation, note))));
+		}
+		return entries;
+	}
+
+	private static boolean isFromToday(ProductReservation reservation) {
+		return reservation.createdAt() != null && reservation.createdAt().toLocalDate().equals(LocalDate.now());
+	}
+
+	private String noteFor(ProductReservation reservation, String fallback) {
+		if (reservation.status() == ReservationStatus.IN_CART && reservation.cartExpiresAt() != null) {
+			return "expires " + reservation.cartExpiresAt().toLocalTime().withNano(0);
+		}
+		return fallback;
+	}
+
+	private Map<Long, String> profileNameIndex() {
+		return profileService.listAll().stream().collect(Collectors.toMap(Profile::id, Profile::name, (a, b) -> a));
+	}
+
+	private String buildDebugText() {
+		var counts = countsByStatus();
+		var zalando = properties.zalando();
+		var scheduler = properties.scheduler();
+
+		var sb = new StringBuilder("🔬 <b>Debug</b>\n\n");
+		sb.append("<b>Reservations</b>\n");
+		for (var status : ReservationStatus.values()) {
+			sb.append("  ").append(status).append(": ").append(counts.getOrDefault(status, 0L)).append('\n');
+		}
+		sb.append("\n<b>Today</b>\n");
+		var todaysProducts = productPort.findByDiscoveredAt(LocalDate.now());
+		sb.append("  Products discovered: ").append(todaysProducts.size()).append('\n');
+		sb.append("  Campaigns: ")
+			.append(todaysProducts.stream().map(DiscoveredProduct::campaignId).distinct().count())
+			.append('\n');
+
+		sb.append("\n<b>Config</b>\n");
+		sb.append("  Base URL: ").append(zalando.baseUrl()).append('\n');
+		sb.append("  Browser endpoint: ").append(zalando.browserWsEndpoint()).append('\n');
+		sb.append("  Headless: ").append(zalando.headless()).append('\n');
+		sb.append("  Scan cron: ").append(scheduler.scanCron()).append(" (").append(scheduler.timezone()).append(")\n");
+		sb.append("  Summary cron: ").append(scheduler.summaryCron()).append('\n');
+		sb.append("  Keep-alive cron: ").append(scheduler.keepAliveCron()).append('\n');
+		sb.append("  Cart expiry: ").append(properties.cart().expiryMinutes()).append(" min\n");
+		sb.append("  Max keep-alive: ").append(properties.cart().maxKeepAliveHours()).append(" h");
+		return sb.toString();
+	}
+
+	private Map<ReservationStatus, Long> countsByStatus() {
+		return Arrays.stream(ReservationStatus.values())
+			.collect(Collectors.toMap(Function.identity(), status -> (long) reservationPort.findByStatus(status).size(),
+					(a, b) -> a));
+	}
+
 	private String buildStatusText() {
 		var items = reservationPort.findByStatus(ReservationStatus.IN_CART);
 		if (items.isEmpty()) {
@@ -292,6 +405,8 @@ public class TelegramBotHandler {
 				<b>CartPilot Commands</b>
 
 				/status — Show current cart items
+				/links — Post clickable links for every open item (reserved, blocked, notify)
+				/debug — Show reservation counts, today's totals and the live config
 				/help — Show this message
 
 				<i>Admin only:</i>
@@ -310,11 +425,14 @@ public class TelegramBotHandler {
 	// ── Infrastructure helpers ─────────────────────────────────
 
 	private void reply(String chatId, String text) {
-		try {
-			telegramClient.execute(SendMessage.builder().chatId(chatId).text(text).parseMode(ParseMode.HTML).build());
-		}
-		catch (TelegramApiException e) {
-			log.error("Failed to send reply: {}", e.getMessage(), e);
+		for (var chunk : TelegramMessageFormatter.splitForTelegram(text)) {
+			try {
+				telegramClient
+					.execute(SendMessage.builder().chatId(chatId).text(chunk).parseMode(ParseMode.HTML).build());
+			}
+			catch (TelegramApiException e) {
+				log.error("Failed to send reply ({} chars): {}", chunk.length(), e.getMessage(), e);
+			}
 		}
 	}
 
