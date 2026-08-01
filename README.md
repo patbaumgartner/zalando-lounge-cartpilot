@@ -23,8 +23,15 @@ No web UI. No admin panel. Everything controlled via Telegram.
 2. Products are matched against each active profile's brand tiers, gender, sizes, and price caps.
 3. **Tier 1 brands** → item is added to cart automatically and a notification is posted to the group.
 4. **Tier 2 brands** → collected into a **06:10 morning summary** posted to the group.
-5. Group members tap **[🛍 Buy]** or **[❌ Skip]** inline buttons to act on notifications.
-6. Every 15 minutes the cart keep-alive scheduler removes and re-adds each reserved item, which resets Zalando's server-side reservation timer and prolongs the hold (default 20 min timeout, up to 2 h).
+5. Every scan ends with a **scan report** (counts, timings, failures) plus a **link list per outcome** — reserved, blocked by bot protection, notify-only, and size-gone — so every matched product is one tap away.
+6. Group members tap **[🛍 Buy]** or **[❌ Skip]** inline buttons to act on notifications.
+7. Every 15 minutes the cart keep-alive scheduler removes and re-adds each reserved item, which resets Zalando's server-side reservation timer and prolongs the hold (default 20 min timeout, up to 2 h).
+
+### Bot protection
+
+Zalando's basket endpoint sits behind Akamai BotManager. A refused cart add is reported as **blocked**, never as *sold out*: the reservation is kept as `BLOCKED`, the product stays on the link list for a manual grab, and a keep-alive that gets blocked leaves the existing hold untouched instead of expiring it.
+
+Telegram rejects messages over 4096 characters, so every outbound message is split on line boundaries — a scan matching dozens of items arrives as several messages rather than silently vanishing.
 
 ## Architecture
 
@@ -208,6 +215,8 @@ All commands work inside the group. Profile management is restricted to group ad
 | Command | Who | Description |
 |---|---|---|
 | `/status` | Anyone | Show cart items with expiry times and profile labels |
+| `/links` | Anyone | Post a clickable link list for every open item today — reserved, blocked and notify-only |
+| `/debug` | Anyone | Reservation counts by status, today's totals, and the live configuration |
 | `/scan` | Admin | Trigger an immediate campaign scan |
 | `/clear` | Admin | Remove all items currently in cart and mark active reservations as rejected |
 | `/profiles` | Admin | List all profiles with active/inactive status |
