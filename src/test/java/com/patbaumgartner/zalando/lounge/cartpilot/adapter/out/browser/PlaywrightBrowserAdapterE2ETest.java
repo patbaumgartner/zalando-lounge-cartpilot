@@ -21,8 +21,12 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.springframework.core.env.StandardEnvironment;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 
 @DisplayName("PlaywrightBrowserAdapter end-to-end")
 class PlaywrightBrowserAdapterE2ETest {
@@ -37,7 +41,7 @@ class PlaywrightBrowserAdapterE2ETest {
 				var playwright = Playwright.create();
 				var browser = launchBrowser(playwright)) {
 			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
-			var authService = mock(AuthenticationService.class);
+			var authService = cartAuthService(properties);
 			var campaignScraper = mock(CampaignScraper.class);
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
@@ -61,7 +65,7 @@ class PlaywrightBrowserAdapterE2ETest {
 				var playwright = Playwright.create();
 				var browser = launchBrowser(playwright)) {
 			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
-			var authService = mock(AuthenticationService.class);
+			var authService = cartAuthService(properties);
 			var campaignScraper = mock(CampaignScraper.class);
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
@@ -82,7 +86,7 @@ class PlaywrightBrowserAdapterE2ETest {
 				var playwright = Playwright.create();
 				var browser = launchBrowser(playwright)) {
 			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
-			var authService = mock(AuthenticationService.class);
+			var authService = cartAuthService(properties);
 			var campaignScraper = mock(CampaignScraper.class);
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
@@ -109,7 +113,7 @@ class PlaywrightBrowserAdapterE2ETest {
 				var playwright = Playwright.create();
 				var browser = launchBrowser(playwright)) {
 			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
-			var authService = mock(AuthenticationService.class);
+			var authService = cartAuthService(properties);
 			var campaignScraper = mock(CampaignScraper.class);
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
@@ -121,6 +125,15 @@ class PlaywrightBrowserAdapterE2ETest {
 			assertThat(server.cartCount()).isZero();
 			assertThat(adapter.isItemInCart(server.productUrl())).isFalse();
 		}
+	}
+
+	/**
+	 * Real service so the button click actually fires; only the slow warm-up is stubbed.
+	 */
+	private AuthenticationService cartAuthService(CartPilotProperties properties) {
+		var authService = spy(new AuthenticationService(properties, new StandardEnvironment()));
+		doNothing().when(authService).warmUpBotSensor(org.mockito.ArgumentMatchers.any());
+		return authService;
 	}
 
 	private Browser launchBrowser(Playwright playwright) {

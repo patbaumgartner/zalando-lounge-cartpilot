@@ -1,7 +1,6 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.browser;
 
 import com.microsoft.playwright.APIRequestContext;
-import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Browser.NewContextOptions;
@@ -76,12 +75,13 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 		.compile("/campaigns/([^/?#]+)");
 
 	/**
-	 * Upper bound on forced Akamai sensor re-warms during a single cart-add burst. The
-	 * shared {@code _abck} cookie normally clears after the first warm-up but can decay
-	 * mid-run; a few on-demand re-warms recover it without letting a genuinely blocked IP
-	 * spend ~10 s per item chasing a token it will never earn.
+	 * How many times the cart API is polled to confirm the button-click add landed in the
+	 * basket. The click issues the basket request asynchronously, so the write can lag
+	 * the first read.
 	 */
-	private static final int MAX_CART_SENSOR_REWARMS = 3;
+	private static final int CART_CONFIRM_ATTEMPTS = 5;
+
+	private static final long CART_CONFIRM_INTERVAL_MS = 600;
 
 	private final Playwright playwright;
 
@@ -98,10 +98,6 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	private BrowserContext context;
 
 	private boolean cookieConsentHandled;
-
-	private boolean cartSensorWarmed;
-
-	private int cartSensorRewarms;
 
 	private long lastApiRequestAtNanos;
 
@@ -121,12 +117,6 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	@Override
 	public synchronized void ensureAuthenticated() {
 		verifyBrowserAvailable();
-
-		// Each scan starts a fresh cart-add burst; re-arm the Akamai sensor warm-up so
-		// the
-		// first add of the run re-solves the shared _abck cookie.
-		cartSensorWarmed = false;
-		cartSensorRewarms = 0;
 
 		int maxResets = authService.authContextResetRetries();
 		for (int attempt = 0; attempt <= maxResets; attempt++) {
@@ -342,9 +332,9 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				return CartAddResult.failed(0, "unrecognised product URL");
 			}
 
-			// The article's per-size stockcart sku ("simpleSku") is required by the
-			// basket API; look it up from the authoritative catalog detail so a size sold
-			// out since discovery is caught here rather than added blindly.
+			// simpleSku lookup distinguishes a genuinely sold-out size from a bot-wall
+			// block, so the two get the right follow-up rather than both looking
+			// "blocked".
 			var articleFetch = fetchArticle(productUrl);
 			if (articleFetch.article() == null) {
 				log.warn("Could not load article detail for cart add: {} (status {})", productUrl,
@@ -359,53 +349,11 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				return CartAddResult.sizeUnavailable("size " + size + " not purchasable");
 			}
 
-			// The stockcart basket endpoint is guarded by Akamai BotManager. A POST
-			// issued
-			// before the context's _abck cookie is promoted to a solved state comes back
-			// 403 edge_error:halt, so warm the sensor once (interactive mouse/scroll) and
-			// then reuse the now-trusted shared cookie for the SPA's own POST. That is
-			// far
-			// more reliable than driving the article page's add-to-cart button, which
-			// does
-			// not register the add under a headless browser.
-			ensureCartSensorWarm();
-
-			var request = connectedRequestContext();
-			var payload = new java.util.LinkedHashMap<String, Object>();
-			payload.put("campaignIdentifier", campaignId);
-			payload.put("configSku", configSku);
-			payload.put("simpleSku", simpleSku);
-			payload.put("quantity", 1);
-			payload.put("additional", java.util.Map.of("reco", "0"));
-			String cartAddUrl = properties.zalando().cartApiUrl() + "/items";
-
-			int status = postCartItem(request, cartAddUrl, payload, productUrl, size);
-			if (status == 403 && cartSensorRewarms < MAX_CART_SENSOR_REWARMS) {
-				cartSensorRewarms++;
-				log.info("Cart add 403 for {} (size {}); re-warming Akamai sensor ({}/{}) and retrying", productUrl,
-						size, cartSensorRewarms, MAX_CART_SENSOR_REWARMS);
-				warmCartSensor();
-				status = postCartItem(request, cartAddUrl, payload, productUrl, size);
-			}
-			if (status < 200 || status >= 300) {
-				if (status != 403) {
-					return CartAddResult.failed(status, "basket API rejected the add");
-				}
-				log.info("Direct cart add still 403 for {} (size {}); trying warmed in-page add", productUrl, size);
-				int fallbackStatus = addToCartViaPageFetch(productUrl, cartAddUrl, payload);
-				if (fallbackStatus < 200 || fallbackStatus >= 300) {
-					return CartAddResult.blocked(fallbackStatus > 0 ? fallbackStatus : status,
-							"bot protection refused the basket call");
-				}
-			}
-
-			boolean inCart = fetchCartItems(request).stream().anyMatch(item -> configSku.equals(item.configSku()));
-			log.atInfo()
-				.addArgument(productUrl)
-				.addArgument(size)
-				.addArgument(inCart)
-				.log("addToCart result for {} (size {}): inCart={}");
-			return inCart ? CartAddResult.added() : CartAddResult.failed(status, "basket did not confirm the item");
+			// Akamai BotManager 403s the APIRequestContext POST (non-browser TLS
+			// fingerprint) even with a solved _abck; the real button click issues the
+			// SPA's own request from Chromium's stack, which BotManager scores far
+			// higher.
+			return addToCartViaButtonClick(productUrl, size, configSku);
 		}
 		catch (Exception e) {
 			log.error("addToCart failed for {}: {}", productUrl, e.getMessage(), e);
@@ -414,135 +362,131 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Replays the basket POST from inside a warmed article page. Returns the HTTP status
-	 * of that fetch, or {@code -1} when the page could not run it at all.
+	 * Reserves the article by driving its detail page like a human: warm the Akamai
+	 * sensor, select the requested size, then click the page's own add-to-cart button so
+	 * the basket request is issued browser-natively by the SPA. Success is confirmed
+	 * against the authoritative cart API rather than the button's own response, and a
+	 * failure to confirm is reported as {@link CartAddOutcome#BLOCKED} so the item stays
+	 * on the link list for a manual grab.
 	 */
-	private int addToCartViaPageFetch(String productUrl, String cartAddUrl, java.util.Map<String, Object> payload) {
+	private CartAddResult addToCartViaButtonClick(String productUrl, String size, String configSku) {
 		try (var page = openPage()) {
 			page.navigate(productUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
 			acceptCookieBannerOnce(page);
-			// The stockcart endpoint is Akamai-guarded; let the sensor observe genuine
-			// interaction on the article page so _abck is solved before the in-page POST.
 			authService.warmUpBotSensor(page);
 
-			@SuppressWarnings("unchecked")
-			var result = (java.util.Map<String, Object>) page.evaluate("""
-					async ({ url, body, referer, origin }) => {
-					  const response = await fetch(url, {
-					    method: 'POST',
-					    credentials: 'include',
-					    headers: {
-					      'Content-Type': 'application/json',
-					      'Accept': 'application/json',
-					      'X-Requested-With': 'XMLHttpRequest',
-					      'Referer': referer,
-					      'Origin': origin
-					    },
-					    body: JSON.stringify(body)
-					  });
-					  let text = '';
-					  try {
-					    text = await response.text();
-					  } catch (_) {
-					    text = '';
-					  }
-					  return {
-					    ok: response.ok,
-					    status: response.status,
-					    body: text
-					  };
-					}
-					""", java.util.Map.of("url", cartAddUrl, "body", payload, "referer", productUrl, "origin",
-					origin(productUrl)));
-
-			boolean ok = Boolean.TRUE.equals(result.get("ok"));
-			Number status = result.get("status") instanceof Number n ? n : Integer.valueOf(-1);
-			String body = safeSnippet(String.valueOf(result.getOrDefault("body", "")));
-			if (!ok) {
-				log.warn("In-page cart add fetch returned status {} for {} (body={})", status.intValue(), productUrl,
-						body);
+			if (!selectSize(page, productUrl, size)) {
+				return CartAddResult.failed(0, "size " + size + " could not be selected on the article page");
 			}
-			return status.intValue();
+
+			var addButton = findAddToCartButton(page);
+			if (addButton == null) {
+				log.warn("No add-to-cart button found on {}", productUrl);
+				return CartAddResult.failed(0, "add-to-cart button not found on the article page");
+			}
+			authService.clickHumanLike(page, addButton);
+
+			boolean inCart = waitForCartConfirmation(configSku);
+			log.atInfo()
+				.addArgument(productUrl)
+				.addArgument(size)
+				.addArgument(inCart)
+				.log("addToCart (button click) result for {} (size {}): inCart={}");
+			return inCart ? CartAddResult.added()
+					: CartAddResult.blocked(403, "basket did not confirm the item after add-to-cart click");
 		}
 		catch (Exception e) {
-			log.warn("In-page cart add fallback failed for {}: {}", productUrl, e.getMessage());
-			return -1;
+			log.warn("Button-click cart add failed for {} (size {}): {}", productUrl, size, e.getMessage());
+			return CartAddResult.failed(0, e.getMessage());
 		}
 	}
 
 	/**
-	 * Issues the stockcart basket POST once and returns the HTTP status (or {@code -1} on
-	 * a transport error). Non-2xx responses are logged with a body snippet so an Akamai
-	 * {@code edge_error:halt} rejection is visible in the run log.
+	 * Clicks the size radio's visible label for the requested size on the article page.
+	 * Returns {@code false} when no selectable label matches, so the caller can stop
+	 * before clicking add-to-cart with no size chosen.
 	 */
-	private int postCartItem(APIRequestContext request, String cartAddUrl, java.util.Map<String, Object> payload,
-			String productUrl, String size) {
-		APIResponse response = null;
+	private boolean selectSize(Page page, String productUrl, String size) {
+		var sizeInputs = page.locator(SIZE_OPTION_SELECTOR);
 		try {
-			response = request.post(cartAddUrl,
-					com.microsoft.playwright.options.RequestOptions.create()
-						.setHeader("Content-Type", "application/json")
-						.setHeader("Accept", "application/json")
-						.setHeader("X-Requested-With", "XMLHttpRequest")
-						.setHeader("Origin", origin(productUrl))
-						.setHeader("Referer", productUrl)
-						.setData(objectMapper.writeValueAsString(payload)));
-			int status = response.status();
-			if (status < 200 || status >= 300) {
-				log.warn("Cart add API returned status {} for {} (size {}), endpoint={}, body={}", status, productUrl,
-						size, cartAddUrl, safeSnippet(response.text()));
-			}
-			return status;
+			sizeInputs.first()
+				.waitFor(new Locator.WaitForOptions().setTimeout(properties.zalando().elementTimeoutMs()));
 		}
 		catch (Exception e) {
-			log.warn("Cart add POST failed for {} (size {}): {}", productUrl, size, e.getMessage());
-			return -1;
+			log.warn("No size options rendered on {} — cannot select size {}", productUrl, size);
+			return false;
 		}
-		finally {
-			if (response != null) {
-				response.dispose();
+		String target = size == null ? "" : size.trim();
+		int count = sizeInputs.count();
+		for (int i = 0; i < count; i++) {
+			var input = sizeInputs.nth(i);
+			if (Boolean.TRUE.equals(input.isDisabled())) {
+				continue;
+			}
+			String id = input.getAttribute("id");
+			if (id == null || id.isBlank()) {
+				continue;
+			}
+			var label = page.locator("label[for='%s']".formatted(id));
+			if (label.count() == 0) {
+				continue;
+			}
+			String optionSize = label.first().innerText().trim().split("\\R")[0].trim();
+			if (target.equalsIgnoreCase(optionSize)) {
+				authService.clickHumanLike(page, label.first());
+				return true;
 			}
 		}
+		log.warn("Size '{}' has no selectable label on {}", size, productUrl);
+		return false;
 	}
 
 	/**
-	 * Warms the Akamai stockcart sensor at most once per run, before the cart-add burst.
+	 * Locates the article page's add-to-cart control without depending on one brittle
+	 * selector: it tries a {@code data-testid} carrying "add-to-cart", then a button
+	 * whose accessible name reads like a basket action (DE/EN), returning the first that
+	 * is actually present. Returns {@code null} when none match.
 	 */
-	private synchronized void ensureCartSensorWarm() {
-		if (!cartSensorWarmed) {
-			warmCartSensor();
+	private Locator findAddToCartButton(Page page) {
+		var byTestId = page.locator("button[data-testid*='add-to-cart' i], [data-testid*='add-to-cart' i] button,"
+				+ " button[data-testid*='addToCart' i]");
+		if (byTestId.count() > 0) {
+			return byTestId.first();
 		}
+		var byName = page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
+				new Page.GetByRoleOptions()
+					.setName(java.util.regex.Pattern.compile("warenkorb|add to cart|in den warenkorb|zur.?ck.legen",
+							java.util.regex.Pattern.CASE_INSENSITIVE)));
+		if (byName.count() > 0) {
+			return byName.first();
+		}
+		var byCartTestId = page.locator("button[data-testid*='cart' i]");
+		return byCartTestId.count() > 0 ? byCartTestId.first() : null;
 	}
 
 	/**
-	 * Loads a lounge page and drives an interactive Akamai BotManager warm-up so the
-	 * shared context {@code _abck} cookie is promoted to a solved state. The stockcart
-	 * POST reuses that cookie, so a single warm-up unblocks the whole add burst; it is
-	 * re-run on demand when a 403 shows the token has decayed. Best-effort — a warm-up
-	 * failure is logged and the add proceeds regardless.
+	 * Polls the authoritative cart API until the article appears in the basket or a short
+	 * budget elapses. The button click issues the basket request asynchronously, so an
+	 * immediate read can race ahead of the write; a few spaced retries confirm the add
+	 * without waiting on a fixed sleep.
 	 */
-	private synchronized void warmCartSensor() {
-		try (var page = openPage()) {
-			page.navigate(properties.zalando().baseUrl(),
-					new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-			acceptCookieBannerOnce(page);
-			authService.warmUpBotSensor(page);
-			cartSensorWarmed = true;
-			log.info("Akamai stockcart sensor warm-up complete");
+	private boolean waitForCartConfirmation(String configSku) {
+		var request = connectedRequestContext();
+		for (int attempt = 0; attempt < CART_CONFIRM_ATTEMPTS; attempt++) {
+			boolean inCart = fetchCartItems(request).stream().anyMatch(item -> configSku.equals(item.configSku()));
+			if (inCart) {
+				return true;
+			}
+			try {
+				Thread.sleep(CART_CONFIRM_INTERVAL_MS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return false;
+			}
 		}
-		catch (Exception e) {
-			log.warn("Akamai stockcart sensor warm-up failed (continuing anyway): {}", e.getMessage());
-		}
-	}
-
-	private String safeSnippet(String body) {
-		if (body == null) {
-			return "";
-		}
-		String trimmed = body.strip();
-		return trimmed.length() <= 400 ? trimmed : trimmed.substring(0, 400);
+		return false;
 	}
 
 	/**
@@ -923,8 +867,6 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			options.setStorageStatePath(sessionPath);
 		}
 		cookieConsentHandled = false;
-		cartSensorWarmed = false;
-		cartSensorRewarms = 0;
 		return browser.newContext(options);
 	}
 

@@ -602,7 +602,15 @@ public class AuthenticationService {
 	}
 
 	private void clickHumanLike(Page page, String selector) {
-		var target = page.locator(selector).first();
+		clickHumanLike(page, page.locator(selector).first());
+	}
+
+	/**
+	 * Moves the cursor to the target along a human-like trajectory and clicks it, so the
+	 * article page's add-to-cart button fires a trusted click event that Akamai's
+	 * BotManager scores higher than a hand-rolled {@code fetch} POST.
+	 */
+	public void clickHumanLike(Page page, com.microsoft.playwright.Locator target) {
 		moveMouseTo(page, target);
 		target.click(new com.microsoft.playwright.Locator.ClickOptions().setTimeout(elementTimeoutMs));
 	}
