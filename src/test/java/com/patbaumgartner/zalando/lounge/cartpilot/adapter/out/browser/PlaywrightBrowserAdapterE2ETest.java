@@ -19,6 +19,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.core.env.StandardEnvironment;
@@ -127,6 +128,50 @@ class PlaywrightBrowserAdapterE2ETest {
 		}
 	}
 
+	@Test
+	@DisplayName("still reserves the item when bot protection refuses the article lookup")
+	void addsItemWhenArticleLookupIsBlocked() throws Exception {
+		try (var server = new MockCartServer();
+				var playwright = Playwright.create();
+				var browser = launchBrowser(playwright)) {
+			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
+			var authService = cartAuthService(properties);
+			var campaignScraper = mock(CampaignScraper.class);
+			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
+					JsonMapper.builder().build());
+
+			// Akamai answers the catalog detail endpoint with 403. The article page still
+			// renders, so the reservation must go through the button instead of being
+			// written off as blocked before the page is ever opened.
+			server.blockArticleDetailApi();
+
+			var added = adapter.addToCart(server.productUrl(), "52");
+
+			assertThat(added.isAdded()).as("add result was %s", added.describe()).isTrue();
+			assertThat(server.cartCount()).isEqualTo(1);
+		}
+	}
+
+	@Test
+	@DisplayName("reports a size that the article page does not offer as unavailable")
+	void reportsMissingSizeAsUnavailable() throws Exception {
+		try (var server = new MockCartServer();
+				var playwright = Playwright.create();
+				var browser = launchBrowser(playwright)) {
+			var properties = cartPilotProperties(server.baseUrl(), tempDir.resolve("session.json"));
+			var authService = cartAuthService(properties);
+			var campaignScraper = mock(CampaignScraper.class);
+			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
+					JsonMapper.builder().build());
+
+			var result = adapter.addToCart(server.productUrl(), "99");
+
+			assertThat(result.isAdded()).isFalse();
+			assertThat(result.isBlocked()).as("a missing size is sold out, not bot protection").isFalse();
+			assertThat(server.cartCount()).isZero();
+		}
+	}
+
 	/**
 	 * Real service so the button click actually fires; only the slow warm-up is stubbed.
 	 */
@@ -163,6 +208,8 @@ class PlaywrightBrowserAdapterE2ETest {
 		private final AtomicInteger addCount = new AtomicInteger();
 
 		private final AtomicInteger removeCount = new AtomicInteger();
+
+		private final AtomicBoolean articleDetailBlocked = new AtomicBoolean();
 
 		private final String baseUrl;
 
@@ -209,6 +256,10 @@ class PlaywrightBrowserAdapterE2ETest {
 			return removeCount.get();
 		}
 
+		void blockArticleDetailApi() {
+			articleDetailBlocked.set(true);
+		}
+
 		@Override
 		public void close() {
 			server.stop(0);
@@ -253,6 +304,10 @@ class PlaywrightBrowserAdapterE2ETest {
 		}
 
 		private void handleArticleDetailApi(HttpExchange exchange) throws IOException {
+			if (articleDetailBlocked.get()) {
+				respondJson(exchange, 403, "{\"edge_error\":\"halt\"}");
+				return;
+			}
 			respondJson(exchange, 200, """
 					{
 					  "brand": "Mammut",

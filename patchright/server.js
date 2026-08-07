@@ -16,6 +16,7 @@
 //   PATCHRIGHT_HOST      bind host (default 127.0.0.1; use 0.0.0.0 in Docker)
 //   PATCHRIGHT_PORT      fixed port (default: random free port)
 //   PATCHRIGHT_WS_PATH   fixed websocket path (default: random GUID)
+//   PATCHRIGHT_ENABLE_HTTP2   "true" to allow HTTP/2 (default: forced HTTP/1.1)
 
 const { chromium } = require('patchright');
 
@@ -27,16 +28,22 @@ async function main() {
 
     // Keep the argument list minimal: Patchright's stealth relies on NOT
     // re-introducing automation-revealing flags. Only keep what the runtime needs
-    // (sandbox off for containers/WSL, HTTP/2 disabled for the target site).
-    const options = {
-        headless,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-http2',
-        ],
-    };
+    // (sandbox off for containers/WSL).
+    const args = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+    ];
+
+    // Zalando's edge breaks Chromium's HTTP/2: navigating to /login fails with
+    // net::ERR_HTTP2_PROTOCOL_ERROR on every attempt (reproduced 2026-08), so
+    // HTTP/1.1 stays forced even though it costs the h2 fingerprint. Set
+    // PATCHRIGHT_ENABLE_HTTP2=true to re-test once the site tolerates h2.
+    if (process.env.PATCHRIGHT_ENABLE_HTTP2 !== 'true') {
+        args.push('--disable-http2');
+    }
+
+    const options = { headless, args };
     if (host) options.host = host;
     if (port) options.port = port;
     if (wsPath) options.wsPath = wsPath;
