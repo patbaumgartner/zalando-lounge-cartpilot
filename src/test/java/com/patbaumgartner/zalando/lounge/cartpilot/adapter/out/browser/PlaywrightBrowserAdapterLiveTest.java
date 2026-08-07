@@ -55,6 +55,9 @@ class PlaywrightBrowserAdapterLiveTest {
 			var adapter = new PlaywrightBrowserAdapter(playwright, browser, authService, campaignScraper, properties,
 					JsonMapper.builder().build());
 
+			log("Ensuring an authenticated session (reuses session/state.json, logs in otherwise)...");
+			adapter.ensureAuthenticated();
+
 			log("Discovering a currently in-stock article from today's campaigns...");
 			var inStock = findInStockArticle(adapter);
 			if (inStock == null) {
@@ -130,7 +133,7 @@ class PlaywrightBrowserAdapterLiveTest {
 		String email = System.getenv().getOrDefault("ZALANDO_EMAIL", "");
 		String password = System.getenv().getOrDefault("ZALANDO_PASSWORD", "");
 		var zalando = new CartPilotProperties.ZalandoProperties(email, password, "session/state.json", BASE_URL,
-				BASE_URL + "/event", 1, 2, 30_000, 8_000, 1, true, false, 30_000, false, 8_000, 30_000, 30_000, 1_000,
+				BASE_URL + "/event", 1, 2, 30_000, 30_000, 3, true, false, 30_000, false, 8_000, 30_000, 30_000, 1_000,
 				0, true, "target/diagnostics", ws);
 		var telegram = new CartPilotProperties.TelegramProperties("unused", "unused");
 		var cart = new CartPilotProperties.CartProperties(20, 15, 2);

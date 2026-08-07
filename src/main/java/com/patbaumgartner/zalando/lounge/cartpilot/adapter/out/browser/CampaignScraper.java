@@ -2,7 +2,6 @@ package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.browser;
 
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.LoadState;
-import com.microsoft.playwright.options.RequestOptions;
 import com.microsoft.playwright.options.WaitUntilState;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Category;
@@ -36,9 +35,9 @@ import java.util.List;
  * <li>{@code GET /api/phoenix/catalog/events/{campaignId}/articles} → a campaign's
  * articles, each already carrying brand, gender, prices and per-size stock.</li>
  * </ul>
- * Both are queried through the page's {@link com.microsoft.playwright.APIRequestContext}
- * (which shares the authenticated browser context's cookie jar), so no page rendering or
- * DOM scraping is required.
+ * Both are queried with a browser-native {@code fetch()} issued from the page (see
+ * {@link InPageHttpClient}), which shares the authenticated context's cookies and
+ * Chromium's own network stack, so no page rendering or DOM scraping is required.
  */
 @Component
 @Profile("!test")
@@ -77,15 +76,21 @@ class CampaignScraper {
 
 	private static final String DEFAULT_ORIGIN = "https://www.zalando-lounge.ch";
 
+	/** Budget for a single catalog API call made from inside the page. */
+	private static final long API_TIMEOUT_MS = 30_000;
+
 	private final ObjectMapper objectMapper;
 
 	private final AuthenticationService authenticationService;
+
+	private final InPageHttpClient http;
 
 	private long lastArticleRequestAtNanos;
 
 	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService) {
 		this.objectMapper = objectMapper;
 		this.authenticationService = authenticationService;
+		this.http = new InPageHttpClient(API_TIMEOUT_MS);
 	}
 
 	/**
@@ -102,20 +107,18 @@ class CampaignScraper {
 		authenticationService.acceptCookieBannerIfPresent(page);
 
 		String apiUrl = origin(campaignUrl) + CAMPAIGNS_API_PATH;
-		var response = page.request().get(apiUrl, RequestOptions.create().setHeader("Accept", "application/json"));
+		var response = http.get(page, apiUrl);
+		if (!response.ok()) {
+			log.error("My Lounge campaigns API returned {} ({}) — {}", response.describe(), apiUrl,
+					response.bodySnippet());
+			return List.of();
+		}
 		try {
-			if (!response.ok()) {
-				log.error("My Lounge campaigns API returned status {} ({})", response.status(), apiUrl);
-				return List.of();
-			}
-			return parseOpenCampaigns(response.text());
+			return parseOpenCampaigns(response.body());
 		}
 		catch (Exception e) {
 			log.error("Failed to fetch open campaigns from {}: {}", apiUrl, e.getMessage(), e);
 			return List.of();
-		}
-		finally {
-			response.dispose();
 		}
 	}
 
@@ -201,22 +204,23 @@ class CampaignScraper {
 				+ "&fields=1&sort=relevance&no_soldout=0&page=" + pageNo;
 		for (int attempt = 0; attempt <= ARTICLE_RATE_LIMIT_RETRIES; attempt++) {
 			paceArticleRequest();
-			var response = page.request().get(apiUrl, RequestOptions.create().setHeader("Accept", "application/json"));
+			var response = http.get(page, apiUrl);
+			if (response.isRateLimited() && attempt < ARTICLE_RATE_LIMIT_RETRIES) {
+				sleep(ARTICLE_RETRY_BACKOFF_MS * (1L << attempt));
+				continue;
+			}
+			if (!response.ok()) {
+				// A campaign can close between listing and scrape (404/410); only the
+				// first page is worth logging so a genuinely empty result stays
+				// quiet.
+				if (pageNo == 0) {
+					log.warn("Articles API returned {} for campaign {} ({})", response.describe(), campaignId,
+							response.bodySnippet());
+				}
+				return List.of();
+			}
 			try {
-				if (response.status() == 429 && attempt < ARTICLE_RATE_LIMIT_RETRIES) {
-					sleep(ARTICLE_RETRY_BACKOFF_MS * (1L << attempt));
-					continue;
-				}
-				if (!response.ok()) {
-					// A campaign can close between listing and scrape (404/410); only the
-					// first page is worth logging so a genuinely empty result stays
-					// quiet.
-					if (pageNo == 0) {
-						log.warn("Articles API returned status {} for campaign {}", response.status(), campaignId);
-					}
-					return List.of();
-				}
-				var root = objectMapper.readTree(response.text());
+				var root = objectMapper.readTree(response.body());
 				if (!root.isArray()) {
 					return List.of();
 				}
@@ -227,9 +231,6 @@ class CampaignScraper {
 			catch (Exception e) {
 				log.debug("Failed to fetch articles page {} for campaign {}: {}", pageNo, campaignId, e.getMessage());
 				return List.of();
-			}
-			finally {
-				response.dispose();
 			}
 		}
 		return List.of();

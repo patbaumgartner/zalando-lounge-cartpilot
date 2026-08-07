@@ -1,6 +1,5 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.browser;
 
-import com.microsoft.playwright.APIRequestContext;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Browser.NewContextOptions;
@@ -24,12 +23,11 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Playwright-backed implementation of {@link BrowserPort}.
@@ -37,6 +35,12 @@ import java.util.List;
  * Uses a single {@link BrowserContext} (with its own cookie jar) throughout the
  * application lifetime; each operation opens a fresh {@link Page} and closes it when
  * done.
+ *
+ * <p>
+ * Every Zalando API call is issued from inside a page through {@link InPageHttpClient}.
+ * Playwright's own {@code APIRequestContext} shares the cookie jar but runs on Node's
+ * HTTP stack, and Akamai BotManager answers those requests with {@code 403} — which used
+ * to abort a cart add before the article page was ever opened.
  */
 @Component
 @Profile("!test")
@@ -45,6 +49,20 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	private static final Logger log = LoggerFactory.getLogger(PlaywrightBrowserAdapter.class);
 
 	private static final String SIZE_OPTION_SELECTOR = "input[name='size'][data-testid='article-size-toggle']";
+
+	/** Path fragment of the basket write the article page's own button issues. */
+	private static final String STOCKCART_PATH = "/api/phoenix/stockcart/cart";
+
+	/** Sentinel for "the page never issued a basket write". */
+	private static final int NO_WRITE_OBSERVED = -1;
+
+	/**
+	 * Accessible name of the article page's add-to-cart button (DE/EN). Deliberately
+	 * phrase-based: a bare "Warenkorb" also matches the header's basket button.
+	 */
+	private static final java.util.regex.Pattern ADD_TO_CART_NAME = java.util.regex.Pattern.compile(
+			"in den warenkorb|zum warenkorb hinzuf|in den einkaufswagen|add to (cart|basket)|zur.?ck.legen",
+			java.util.regex.Pattern.CASE_INSENSITIVE);
 
 	/**
 	 * How many times to retry the article document request when the site answers
@@ -93,16 +111,25 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	private final ObjectMapper objectMapper;
 
+	private final InPageHttpClient http;
+
+	private final CartApi cartApi;
+
 	private Browser browser;
 
 	private BrowserContext context;
 
+	/**
+	 * Long-lived page parked on the lounge origin, used to issue the API calls that are
+	 * not tied to an article page (cart reads, removals, article lookups during a scan).
+	 * Reusing one page keeps hundreds of scan requests off the page-open/navigate
+	 * treadmill and lets Akamai see one coherent, sensor-warmed document.
+	 */
+	private Page apiPage;
+
 	private boolean cookieConsentHandled;
 
 	private long lastApiRequestAtNanos;
-
-	private record CartItem(String cartItemKey, String configSku) {
-	}
 
 	public PlaywrightBrowserAdapter(Playwright playwright, Browser browser, AuthenticationService authService,
 			CampaignScraper campaignScraper, CartPilotProperties properties, ObjectMapper objectMapper) {
@@ -112,6 +139,8 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 		this.campaignScraper = campaignScraper;
 		this.properties = properties;
 		this.objectMapper = objectMapper;
+		this.http = new InPageHttpClient(properties.zalando().elementTimeoutMs());
+		this.cartApi = new CartApi(this.http, objectMapper, properties.zalando().cartApiUrl());
 	}
 
 	@Override
@@ -154,16 +183,17 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	@Override
 	public List<Campaign> fetchTodayCampaigns() {
-		try (var page = openPage()) {
-			return campaignScraper.scrapeOpenCampaigns(page, properties.zalando().campaignUrl());
-		}
+		return campaignScraper.scrapeOpenCampaigns(apiPage(), properties.zalando().campaignUrl());
 	}
 
+	/**
+	 * Scrapes a campaign's articles from the shared API page. The page must already sit
+	 * on the lounge origin: an in-page {@code fetch()} from a blank page has an opaque
+	 * origin, which the catalog API rejects as cross-origin.
+	 */
 	@Override
 	public List<DiscoveredProduct> scrapeProducts(Campaign campaign) {
-		try (var page = openPage()) {
-			return campaignScraper.scrapeProducts(page, campaign);
-		}
+		return campaignScraper.scrapeProducts(apiPage(), campaign);
 	}
 
 	@Override
@@ -192,7 +222,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	 * can fall back to rendering.
 	 */
 	private ProductDetails fetchProductDetailsViaApi(String productUrl) {
-		JsonNode article = fetchArticle(productUrl).article();
+		JsonNode article = fetchArticleViaApiPage(productUrl).article();
 		if (article == null) {
 			return null;
 		}
@@ -217,61 +247,65 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	/**
 	 * Fetches a single article's catalog JSON
-	 * ({@code /api/phoenix/catalog/events/{campaignId}/articles/{sku}}) through the
-	 * authenticated request context, retrying on 429. The returned article is
-	 * {@code null} when the id could not be derived or the request failed.
+	 * ({@code /api/phoenix/catalog/events/{campaignId}/articles/{sku}}) with a
+	 * browser-native request issued from {@code page}, retrying on 429. The returned
+	 * article is {@code null} when the id could not be derived or the request failed.
 	 */
-	private ArticleFetch fetchArticle(String productUrl) {
+	private ArticleFetch fetchArticle(Page page, String productUrl) {
 		String campaignId = campaignId(productUrl);
 		String sku = articleId(productUrl);
 		if (campaignId == null || sku == null) {
 			return ArticleFetch.failed(0);
 		}
 		String apiUrl = origin(productUrl) + "/api/phoenix/catalog/events/" + campaignId + "/articles/" + sku;
-		var request = connectedRequestContext();
-		try {
-			for (int attempt = 0; attempt <= SIZE_API_RATE_LIMIT_RETRIES; attempt++) {
-				paceApiRequest();
-				var response = request.get(apiUrl, com.microsoft.playwright.options.RequestOptions.create()
-					.setHeader("Accept", "application/json"));
-				try {
-					if (response.status() == 429) {
-						if (attempt == SIZE_API_RATE_LIMIT_RETRIES) {
-							log.warn("Article request still rate-limited (429) after {} retries for {}",
-									SIZE_API_RATE_LIMIT_RETRIES, apiUrl);
-							return ArticleFetch.failed(429);
-						}
-						long backoff = SIZE_API_RETRY_BACKOFF_MS * (1L << attempt);
-						log.debug("Rate-limited (429) on {}; retrying in {} ms (attempt {}/{})", apiUrl, backoff,
-								attempt + 1, SIZE_API_RATE_LIMIT_RETRIES);
-						Thread.sleep(backoff);
-						continue;
-					}
-					if (!response.ok()) {
-						log.warn("Article request returned status {} for {}", response.status(), apiUrl);
-						return ArticleFetch.failed(response.status());
-					}
-					JsonNode article = objectMapper.readTree(response.text());
-					return article.isObject() ? new ArticleFetch(article, response.status())
-							: ArticleFetch.failed(response.status());
+		for (int attempt = 0; attempt <= SIZE_API_RATE_LIMIT_RETRIES; attempt++) {
+			paceApiRequest();
+			var response = http.get(page, apiUrl);
+
+			if (response.isRateLimited()) {
+				if (attempt == SIZE_API_RATE_LIMIT_RETRIES) {
+					log.warn("Article request still rate-limited (429) after {} retries for {}",
+							SIZE_API_RATE_LIMIT_RETRIES, apiUrl);
+					return ArticleFetch.failed(429);
 				}
-				finally {
-					// Free the buffered response body in the Playwright driver; otherwise
-					// undisposed responses accumulate and eventually kill the driver pipe
-					// over a full scan of several hundred articles.
-					response.dispose();
+				long backoff = SIZE_API_RETRY_BACKOFF_MS * (1L << attempt);
+				log.debug("Rate-limited (429) on {}; retrying in {} ms (attempt {}/{})", apiUrl, backoff, attempt + 1,
+						SIZE_API_RATE_LIMIT_RETRIES);
+				if (!sleepQuietly(backoff)) {
+					return ArticleFetch.failed(429);
 				}
+				continue;
 			}
-			return ArticleFetch.failed(0);
+
+			if (!response.ok()) {
+				log.warn("Article request returned {} for {} ({})", response.describe(), apiUrl,
+						response.bodySnippet());
+				return ArticleFetch.failed(response.status());
+			}
+			try {
+				JsonNode article = objectMapper.readTree(response.body());
+				return article.isObject() ? new ArticleFetch(article, response.status())
+						: ArticleFetch.failed(response.status());
+			}
+			catch (Exception e) {
+				log.debug("Could not parse article detail for {}: {}", apiUrl, e.getMessage());
+				return ArticleFetch.failed(response.status());
+			}
 		}
-		catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			return ArticleFetch.failed(0);
+		return ArticleFetch.failed(0);
+	}
+
+	/**
+	 * Article lookup over the shared API page, recreating that page once when it turns
+	 * out to be dead (a status of {@code 0} means no HTTP response was produced at all).
+	 */
+	private ArticleFetch fetchArticleViaApiPage(String productUrl) {
+		var fetched = fetchArticle(apiPage(), productUrl);
+		if (fetched.article() == null && fetched.status() == 0) {
+			closeApiPage();
+			fetched = fetchArticle(apiPage(), productUrl);
 		}
-		catch (Exception e) {
-			log.debug("Could not read article detail for {}: {}", apiUrl, e.getMessage());
-			return ArticleFetch.failed(0);
-		}
+		return fetched;
 	}
 
 	private static String campaignId(String productUrl) {
@@ -324,36 +358,14 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	@Override
 	public CartAddResult addToCart(String productUrl, String size) {
+		String campaignId = campaignId(productUrl);
+		String configSku = articleId(productUrl);
+		if (campaignId == null || configSku == null) {
+			log.warn("Could not derive campaign/article id for cart add: {}", productUrl);
+			return CartAddResult.failed(0, "unrecognised product URL");
+		}
 		try {
-			String campaignId = campaignId(productUrl);
-			String configSku = articleId(productUrl);
-			if (campaignId == null || configSku == null) {
-				log.warn("Could not derive campaign/article id for cart add: {}", productUrl);
-				return CartAddResult.failed(0, "unrecognised product URL");
-			}
-
-			// simpleSku lookup distinguishes a genuinely sold-out size from a bot-wall
-			// block, so the two get the right follow-up rather than both looking
-			// "blocked".
-			var articleFetch = fetchArticle(productUrl);
-			if (articleFetch.article() == null) {
-				log.warn("Could not load article detail for cart add: {} (status {})", productUrl,
-						articleFetch.status());
-				return articleFetch.isBotWall()
-						? CartAddResult.blocked(articleFetch.status(), "bot protection refused the article lookup")
-						: CartAddResult.failed(articleFetch.status(), "article detail unavailable");
-			}
-			String simpleSku = simpleSkuForSize(articleFetch.article().path("simples"), size);
-			if (simpleSku == null) {
-				log.warn("Size '{}' not available on {} — cannot add to cart", size, productUrl);
-				return CartAddResult.sizeUnavailable("size " + size + " not purchasable");
-			}
-
-			// Akamai BotManager 403s the APIRequestContext POST (non-browser TLS
-			// fingerprint) even with a solved _abck; the real button click issues the
-			// SPA's own request from Chromium's stack, which BotManager scores far
-			// higher.
-			return addToCartViaButtonClick(productUrl, size, configSku);
+			return reserveOnArticlePage(productUrl, size, campaignId, configSku);
 		}
 		catch (Exception e) {
 			log.error("addToCart failed for {}: {}", productUrl, e.getMessage(), e);
@@ -364,50 +376,155 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	/**
 	 * Reserves the article by driving its detail page like a human: warm the Akamai
 	 * sensor, select the requested size, then click the page's own add-to-cart button so
-	 * the basket request is issued browser-natively by the SPA. Success is confirmed
-	 * against the authoritative cart API rather than the button's own response, and a
-	 * failure to confirm is reported as {@link CartAddOutcome#BLOCKED} so the item stays
-	 * on the link list for a manual grab.
+	 * the basket request is issued browser-natively by the SPA.
+	 *
+	 * <p>
+	 * Nothing is looked up in the catalog API before the page is driven. That pre-check
+	 * ran over Playwright's Node HTTP stack and its {@code 403} aborted the whole add
+	 * without the article ever being opened — and the rendered page is the better source
+	 * anyway, because a size that cannot be picked there is genuinely gone.
 	 */
-	private CartAddResult addToCartViaButtonClick(String productUrl, String size, String configSku) {
+	private CartAddResult reserveOnArticlePage(String productUrl, String size, String campaignId, String configSku) {
 		try (var page = openPage()) {
 			page.navigate(productUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
 			acceptCookieBannerOnce(page);
 			authService.warmUpBotSensor(page);
 
-			if (!selectSize(page, productUrl, size)) {
-				return CartAddResult.failed(0, "size " + size + " could not be selected on the article page");
+			var before = cartApi.read(page);
+
+			var selection = selectSize(page, productUrl, size);
+			if (selection == SizeSelection.NO_OPTIONS) {
+				return CartAddResult.failed(0, "no size options rendered on the article page");
+			}
+			if (selection == SizeSelection.NOT_OFFERED) {
+				return CartAddResult.sizeUnavailable("size " + size + " is not selectable on the article page");
 			}
 
+			var basketWrite = recordBasketWrites(page);
 			var addButton = findAddToCartButton(page);
-			if (addButton == null) {
-				log.warn("No add-to-cart button found on {}", productUrl);
-				return CartAddResult.failed(0, "add-to-cart button not found on the article page");
+			if (addButton != null) {
+				authService.clickHumanLike(page, addButton);
 			}
-			authService.clickHumanLike(page, addButton);
+			else {
+				log.warn("No add-to-cart button found on {} — falling back to the in-page basket call", productUrl);
+			}
 
-			boolean inCart = waitForCartConfirmation(configSku);
+			var result = confirmOrRetryInPage(page, productUrl, size, campaignId, configSku, before, basketWrite,
+					addButton != null);
 			log.atInfo()
 				.addArgument(productUrl)
 				.addArgument(size)
-				.addArgument(inCart)
-				.log("addToCart (button click) result for {} (size {}): inCart={}");
-			return inCart ? CartAddResult.added()
-					: CartAddResult.blocked(403, "basket did not confirm the item after add-to-cart click");
+				.addArgument(result::describe)
+				.log("addToCart result for {} (size {}): {}");
+			return result;
 		}
 		catch (Exception e) {
-			log.warn("Button-click cart add failed for {} (size {}): {}", productUrl, size, e.getMessage());
+			log.warn("Cart add on the article page failed for {} (size {}): {}", productUrl, size, e.getMessage());
 			return CartAddResult.failed(0, e.getMessage());
 		}
 	}
 
 	/**
-	 * Clicks the size radio's visible label for the requested size on the article page.
-	 * Returns {@code false} when no selectable label matches, so the caller can stop
-	 * before clicking add-to-cart with no size chosen.
+	 * Turns what the page did into a verdict. The basket itself is the authority; the
+	 * status of the write the page issued matters only when the basket cannot be read
+	 * back, and it also decides whether retrying is safe — replaying a write that already
+	 * succeeded would reserve the article twice.
 	 */
-	private boolean selectSize(Page page, String productUrl, String size) {
+	private CartAddResult confirmOrRetryInPage(Page page, String productUrl, String size, String campaignId,
+			String configSku, CartApi.CartSnapshot before, AtomicInteger basketWrite, boolean clicked) {
+		var confirmation = confirmInCart(page, configSku, before);
+		if (confirmation == CartConfirmation.CONFIRMED) {
+			return CartAddResult.added();
+		}
+
+		int writeStatus = basketWrite.get();
+		if (writeStatus >= 200 && writeStatus < 300) {
+			if (confirmation == CartConfirmation.UNREADABLE) {
+				log.info(
+						"Basket write for {} answered HTTP {} but the cart could not be read back — trusting the write",
+						productUrl, writeStatus);
+				return CartAddResult.added();
+			}
+			return CartAddResult.failed(writeStatus,
+					"the page's basket call answered HTTP " + writeStatus + " but the cart does not hold the item");
+		}
+		if (writeStatus == 403 || writeStatus == 429) {
+			return CartAddResult.blocked(writeStatus, "bot protection refused the basket call the page issued");
+		}
+		if (writeStatus != NO_WRITE_OBSERVED) {
+			return CartAddResult.failed(writeStatus, "the page's basket call answered HTTP " + writeStatus);
+		}
+
+		return addViaPageFetch(page, productUrl, size, campaignId, configSku, before, clicked);
+	}
+
+	/**
+	 * Last resort when the page issued no basket write at all — a missing button, or a
+	 * click that went nowhere. The call is made from the article page itself, so it rides
+	 * the same Chromium network stack and the same freshly warmed sensor as the button
+	 * would have: this is not the Node-side POST Akamai used to refuse.
+	 */
+	private CartAddResult addViaPageFetch(Page page, String productUrl, String size, String campaignId,
+			String configSku, CartApi.CartSnapshot before, boolean clicked) {
+		String origin = clicked ? "the add-to-cart click did not reach the basket"
+				: "no add-to-cart button on the page";
+
+		var articleFetch = fetchArticle(page, productUrl);
+		if (articleFetch.article() == null) {
+			String detail = origin + " and the article detail answered HTTP " + articleFetch.status();
+			return articleFetch.isBotWall() ? CartAddResult.blocked(403, detail)
+					: CartAddResult.failed(articleFetch.status(), detail);
+		}
+		String simpleSku = simpleSkuForSize(articleFetch.article().path("simples"), size);
+		if (simpleSku == null) {
+			return CartAddResult.sizeUnavailable("size " + size + " not purchasable");
+		}
+
+		log.info("Retrying the basket call in-page for {} (size {}): {}", productUrl, size, origin);
+		var response = cartApi.addItem(page, campaignId, configSku, simpleSku);
+		if (!response.ok()) {
+			log.warn("In-page basket call for {} (size {}) answered {} ({})", productUrl, size, response.describe(),
+					response.bodySnippet());
+			return response.isBotWall() || response.isRateLimited()
+					? CartAddResult.blocked(response.status(), "bot protection refused the basket call")
+					: CartAddResult.failed(response.status(), "basket call answered " + response.describe());
+		}
+
+		var confirmation = confirmInCart(page, configSku, before);
+		if (confirmation == CartConfirmation.ABSENT) {
+			return CartAddResult.failed(response.status(), "basket accepted the item but the cart does not hold it");
+		}
+		return CartAddResult.added();
+	}
+
+	/**
+	 * Watches the page for the basket write its own add-to-cart button issues, so a
+	 * refusal is reported with the status Zalando actually returned rather than a guess,
+	 * and a write that already succeeded is never replayed.
+	 */
+	private AtomicInteger recordBasketWrites(Page page) {
+		var lastStatus = new AtomicInteger(NO_WRITE_OBSERVED);
+		page.onResponse(response -> {
+			if (response.url().contains(STOCKCART_PATH) && "POST".equalsIgnoreCase(response.request().method())) {
+				lastStatus.set(response.status());
+			}
+		});
+		return lastStatus;
+	}
+
+	private enum SizeSelection {
+
+		SELECTED, NOT_OFFERED, NO_OPTIONS
+
+	}
+
+	/**
+	 * Clicks the size radio's visible label for the requested size on the article page.
+	 * The rendered page is authoritative: a size with no selectable label is gone, which
+	 * the caller reports as sold out without a separate catalog lookup.
+	 */
+	private SizeSelection selectSize(Page page, String productUrl, String size) {
 		var sizeInputs = page.locator(SIZE_OPTION_SELECTOR);
 		try {
 			sizeInputs.first()
@@ -415,7 +532,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 		}
 		catch (Exception e) {
 			log.warn("No size options rendered on {} — cannot select size {}", productUrl, size);
-			return false;
+			return SizeSelection.NO_OPTIONS;
 		}
 		String target = size == null ? "" : size.trim();
 		int count = sizeInputs.count();
@@ -435,58 +552,82 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			String optionSize = label.first().innerText().trim().split("\\R")[0].trim();
 			if (target.equalsIgnoreCase(optionSize)) {
 				authService.clickHumanLike(page, label.first());
-				return true;
+				return SizeSelection.SELECTED;
 			}
 		}
 		log.warn("Size '{}' has no selectable label on {}", size, productUrl);
-		return false;
+		return SizeSelection.NOT_OFFERED;
 	}
 
 	/**
-	 * Locates the article page's add-to-cart control without depending on one brittle
-	 * selector: it tries a {@code data-testid} carrying "add-to-cart", then a button
-	 * whose accessible name reads like a basket action (DE/EN), returning the first that
-	 * is actually present. Returns {@code null} when none match.
+	 * Locates the article page's add-to-cart control. The live page carries no
+	 * {@code data-testid} on any cart button, so the accessible name decides — and it has
+	 * to match the whole phrase ("In den Warenkorb"), never the bare word "Warenkorb":
+	 * that also names the basket button in the header, which sits earlier in the DOM and
+	 * merely navigates away instead of reserving anything.
 	 */
 	private Locator findAddToCartButton(Page page) {
-		var byTestId = page.locator("button[data-testid*='add-to-cart' i], [data-testid*='add-to-cart' i] button,"
-				+ " button[data-testid*='addToCart' i]");
-		if (byTestId.count() > 0) {
-			return byTestId.first();
+		var byTestId = firstUsable(page.locator("button[data-testid*='add-to-cart' i], [data-testid*='add-to-cart' i] "
+				+ "button, button[data-testid*='addToCart' i]"));
+		if (byTestId != null) {
+			return byTestId;
 		}
-		var byName = page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
-				new Page.GetByRoleOptions()
-					.setName(java.util.regex.Pattern.compile("warenkorb|add to cart|in den warenkorb|zur.?ck.legen",
-							java.util.regex.Pattern.CASE_INSENSITIVE)));
-		if (byName.count() > 0) {
-			return byName.first();
-		}
-		var byCartTestId = page.locator("button[data-testid*='cart' i]");
-		return byCartTestId.count() > 0 ? byCartTestId.first() : null;
+		return firstUsable(page.getByRole(com.microsoft.playwright.options.AriaRole.BUTTON,
+				new Page.GetByRoleOptions().setName(ADD_TO_CART_NAME)));
 	}
 
 	/**
-	 * Polls the authoritative cart API until the article appears in the basket or a short
-	 * budget elapses. The button click issues the basket request asynchronously, so an
-	 * immediate read can race ahead of the write; a few spaced retries confirm the add
-	 * without waiting on a fixed sleep.
+	 * Returns the first candidate a person could actually click. Article pages carry
+	 * hidden duplicates of the basket button (mobile/sticky variants), and clicking one
+	 * of those silently does nothing; anything living in the page chrome is skipped
+	 * outright.
 	 */
-	private boolean waitForCartConfirmation(String configSku) {
-		var request = connectedRequestContext();
-		for (int attempt = 0; attempt < CART_CONFIRM_ATTEMPTS; attempt++) {
-			boolean inCart = fetchCartItems(request).stream().anyMatch(item -> configSku.equals(item.configSku()));
-			if (inCart) {
-				return true;
-			}
+	private Locator firstUsable(Locator candidates) {
+		int count = candidates.count();
+		for (int i = 0; i < count; i++) {
+			var candidate = candidates.nth(i);
 			try {
-				Thread.sleep(CART_CONFIRM_INTERVAL_MS);
+				if (!candidate.isVisible() || !candidate.isEnabled()) {
+					continue;
+				}
+				boolean inPageChrome = Boolean.TRUE
+					.equals(candidate.evaluate("element => !!element.closest('header, nav, [role=banner]')"));
+				if (!inPageChrome) {
+					return candidate;
+				}
 			}
-			catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				return false;
+			catch (Exception e) {
+				log.debug("Skipping add-to-cart candidate {}: {}", i, e.getMessage());
 			}
 		}
-		return false;
+		return null;
+	}
+
+	private enum CartConfirmation {
+
+		CONFIRMED, ABSENT, UNREADABLE
+
+	}
+
+	/**
+	 * Polls the basket until the article shows up as a line the pre-click snapshot did
+	 * not have, a short budget elapses, or it becomes clear the cart cannot be read at
+	 * all. The click issues the basket request asynchronously, so an immediate read can
+	 * race ahead of the write.
+	 */
+	private CartConfirmation confirmInCart(Page page, String configSku, CartApi.CartSnapshot before) {
+		boolean everReadable = false;
+		for (int attempt = 0; attempt < CART_CONFIRM_ATTEMPTS; attempt++) {
+			var current = cartApi.read(page);
+			everReadable |= current.readable();
+			if (current.gainedLineFor(configSku, before)) {
+				return CartConfirmation.CONFIRMED;
+			}
+			if (!sleepQuietly(CART_CONFIRM_INTERVAL_MS)) {
+				break;
+			}
+		}
+		return everReadable ? CartConfirmation.ABSENT : CartConfirmation.UNREADABLE;
 	}
 
 	/**
@@ -553,11 +694,17 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				return;
 			}
 
-			var request = connectedRequestContext();
+			var snapshot = readCart();
+			if (!snapshot.readable()) {
+				log.warn("Cart could not be read (HTTP {}) — leaving {} untouched", snapshot.status(), productUrl);
+				return;
+			}
+
+			var page = apiPage();
 			boolean removed = false;
-			for (var cartItem : fetchCartItems(request)) {
+			for (var cartItem : snapshot.items()) {
 				if (articleId.equals(cartItem.configSku())) {
-					removed |= removeCartItemViaApi(request, cartItem);
+					removed |= cartApi.removeItem(page, cartItem);
 				}
 			}
 
@@ -572,12 +719,12 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	@Override
 	public boolean isItemInCart(String productUrl) {
-		try (var page = openPage()) {
-			// The cart API call needs the site's cookies/origin; land on the base URL
-			// first, then query the authoritative basket endpoint.
-			page.navigate(properties.zalando().baseUrl());
-			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
-			return isInCartViaApi(page, articleId(productUrl));
+		try {
+			String articleId = articleId(productUrl);
+			if (articleId == null || articleId.isBlank()) {
+				return false;
+			}
+			return readCart().contains(articleId);
 		}
 		catch (Exception e) {
 			log.error("isItemInCart failed for {}: {}", productUrl, e.getMessage(), e);
@@ -605,76 +752,17 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Checks the authoritative cart API for the given article. The {@code /cart} page
-	 * only renders recommendation carousels; the basket itself is exposed as JSON at
-	 * {@link CartPilotProperties.ZalandoProperties#cartApiUrl()} where each line item
-	 * carries a {@code configSku} equal to the article id (e.g. {@code JA222E1K2-K11}).
+	 * Reads the basket over the shared API page, recreating that page once when the read
+	 * produced no HTTP response at all (a dead page after a dropped Patchright
+	 * connection).
 	 */
-	private boolean isInCartViaApi(Page page, String articleId) {
-		if (articleId == null || articleId.isBlank()) {
-			return false;
+	private CartApi.CartSnapshot readCart() {
+		var snapshot = cartApi.read(apiPage());
+		if (!snapshot.readable() && snapshot.status() == 0) {
+			closeApiPage();
+			snapshot = cartApi.read(apiPage());
 		}
-		return fetchCartItems(page.request()).stream().anyMatch(cartItem -> articleId.equals(cartItem.configSku()));
-	}
-
-	private List<CartItem> fetchCartItems(APIRequestContext request) {
-		try {
-			var response = request.get(properties.zalando().cartApiUrl());
-			try {
-				if (!response.ok()) {
-					log.warn("Cart API returned status {} when reading basket", response.status());
-					return List.of();
-				}
-				String body = response.text();
-				if (body.isBlank()) {
-					return List.of();
-				}
-
-				JsonNode items = objectMapper.readTree(body).path("items");
-				if (!items.isArray()) {
-					return List.of();
-				}
-
-				var cartItems = new ArrayList<CartItem>();
-				for (JsonNode item : items) {
-					String cartItemKey = item.path("cartItemKey").asString("").trim();
-					String configSku = item.path("configSku").asString("").trim();
-					if (!cartItemKey.isBlank() && !configSku.isBlank()) {
-						cartItems.add(new CartItem(cartItemKey, configSku));
-					}
-				}
-				return cartItems;
-			}
-			finally {
-				response.dispose();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Cart API read failed: {}", e.getMessage());
-			return List.of();
-		}
-	}
-
-	private boolean removeCartItemViaApi(APIRequestContext request, CartItem cartItem) {
-		String url = properties.zalando().cartApiUrl() + "/items/"
-				+ URLEncoder.encode(cartItem.cartItemKey(), StandardCharsets.UTF_8);
-		try {
-			var response = request.delete(url);
-			try {
-				if (response.ok()) {
-					return true;
-				}
-				log.warn("Cart API returned status {} when removing {}", response.status(), cartItem.configSku());
-				return false;
-			}
-			finally {
-				response.dispose();
-			}
-		}
-		catch (Exception e) {
-			log.warn("Cart API remove failed for {}: {}", cartItem.configSku(), e.getMessage());
-			return false;
-		}
+		return snapshot;
 	}
 
 	private static String articleId(String productUrl) {
@@ -688,10 +776,16 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	@Override
 	public int clearCart() {
 		try {
-			var request = connectedRequestContext();
+			var snapshot = readCart();
+			if (!snapshot.readable()) {
+				log.warn("Cart could not be read (HTTP {}) — nothing was cleared", snapshot.status());
+				return 0;
+			}
+
+			var page = apiPage();
 			int removed = 0;
-			for (var cartItem : fetchCartItems(request)) {
-				if (removeCartItemViaApi(request, cartItem)) {
+			for (var cartItem : snapshot.items()) {
+				if (cartApi.removeItem(page, cartItem)) {
 					removed++;
 				}
 			}
@@ -746,15 +840,48 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	/**
-	 * Returns the shared context request context, reconnecting first if the long-lived
-	 * Patchright connection has dropped. Reusing the context's {@link APIRequestContext}
-	 * lets the size scan issue hundreds of authenticated document requests without
-	 * opening (and tearing down) a {@link Page} per article, which previously churned the
-	 * CDP connection until the driver died.
+	 * Returns the shared page the non-article API calls are issued from, parked on the
+	 * lounge origin so every {@code fetch()} is same-origin and carries the session
+	 * cookies. Reusing one page lets a scan issue hundreds of authenticated requests
+	 * without opening (and tearing down) a {@link Page} per article, and keeps a single
+	 * document — with its Akamai sensor script — alive for the whole run.
 	 */
-	private synchronized APIRequestContext connectedRequestContext() {
+	private synchronized Page apiPage() {
 		ensureConnected();
-		return context.request();
+		if (apiPage != null && !apiPage.isClosed()) {
+			return apiPage;
+		}
+		var page = newLivePage();
+		page.navigate(properties.zalando().baseUrl(),
+				new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+		acceptCookieBannerOnce(page);
+		apiPage = page;
+		return apiPage;
+	}
+
+	private synchronized void closeApiPage() {
+		if (apiPage != null) {
+			try {
+				apiPage.close();
+			}
+			catch (Exception e) {
+				log.debug("Could not close the shared API page: {}", e.getMessage());
+			}
+			apiPage = null;
+		}
+	}
+
+	/** Sleeps, returning {@code false} when the thread was interrupted meanwhile. */
+	private static boolean sleepQuietly(long millis) {
+		try {
+			Thread.sleep(millis);
+			return true;
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return false;
+		}
 	}
 
 	/**
@@ -803,6 +930,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	private void ensureConnected() {
 		if (browser == null || !browser.isConnected()) {
 			log.warn("Patchright connection lost; reconnecting");
+			apiPage = null;
 			try {
 				browser = playwright.chromium().connect(properties.zalando().browserWsEndpoint());
 			}
@@ -817,6 +945,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	private void resetContext() {
+		closeApiPage();
 		if (context != null) {
 			try {
 				context.close();
@@ -837,6 +966,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	 * would hand back another dead context.
 	 */
 	private void forceReconnect() {
+		apiPage = null;
 		if (context != null) {
 			try {
 				context.close();

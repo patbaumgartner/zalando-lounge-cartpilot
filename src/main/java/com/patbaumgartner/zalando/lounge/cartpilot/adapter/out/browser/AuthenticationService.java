@@ -88,6 +88,8 @@ public class AuthenticationService {
 
 	private final String homeUrl;
 
+	private final InPageHttpClient http;
+
 	public AuthenticationService(CartPilotProperties properties, Environment environment) {
 		this.properties = properties;
 		this.environment = environment;
@@ -107,6 +109,7 @@ public class AuthenticationService {
 		this.loginUrl = joinUrl(properties.zalando().baseUrl(), "login");
 		this.sessionCheckUrl = joinUrl(properties.zalando().baseUrl(), "event");
 		this.homeUrl = properties.zalando().baseUrl();
+		this.http = new InPageHttpClient((long) this.sessionCheckTimeoutMs);
 	}
 
 	public void ensureAuthenticated(BrowserContext context) {
@@ -162,7 +165,21 @@ public class AuthenticationService {
 		// so an expired session still passes. Stage C asks the cart API — it returns
 		// JSON only for authenticated sessions (logged-out requests get an HTML
 		// login/interstitial page instead).
-		return isSessionValidByCartApi(context);
+		return switch (probeCartApi(context)) {
+			case VALID -> true;
+			case LOGGED_OUT -> false;
+			case INCONCLUSIVE -> {
+				log.warn("Session validation stage C was inconclusive (bot wall or transport error); keeping the "
+						+ "existing session instead of clearing its cookies for a re-login that would fail too");
+				yield true;
+			}
+		};
+	}
+
+	private enum SessionProbe {
+
+		VALID, LOGGED_OUT, INCONCLUSIVE
+
 	}
 
 	private boolean isDevProfileActive() {
@@ -226,34 +243,42 @@ public class AuthenticationService {
 	 * Authoritative session check: the cart API returns JSON for authenticated sessions
 	 * and an HTML login/interstitial page otherwise. A URL-based probe cannot detect this
 	 * because Zalando Lounge does not redirect logged-out visitors.
+	 * <p>
+	 * The call is issued from inside the page, not through Playwright's request context:
+	 * that one runs on Node's HTTP stack, which Akamai answers with {@code 403} — and
+	 * reading a bot-wall {@code 403} as "session expired" used to trigger a re-login that
+	 * cleared the very cookies the wall had already accepted. Only explicit logged-out
+	 * evidence counts as invalid; everything else is inconclusive.
 	 */
-	private boolean isSessionValidByCartApi(BrowserContext context) {
-		try {
-			var response = context.request()
-				.get(properties.zalando().cartApiUrl(),
-						com.microsoft.playwright.options.RequestOptions.create()
-							.setTimeout(sessionCheckTimeoutMs)
-							.setHeader("Accept", "application/json"));
-			try {
-				if (!response.ok()) {
-					log.info("Session validation stage C failed: cart API returned status {}", response.status());
-					return false;
+	private SessionProbe probeCartApi(BrowserContext context) {
+		try (var page = context.newPage()) {
+			attachNetworkDiagnostics(page, "session-cart-check");
+			page.navigate(sessionCheckUrl,
+					new com.microsoft.playwright.Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+						.setTimeout(sessionCheckTimeoutMs));
+			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
+
+			var response = http.get(page, properties.zalando().cartApiUrl());
+			if (response.ok()) {
+				// An empty basket answers 204 with no body; only an HTML page means
+				// logged out.
+				if (response.isJson() || response.body().isBlank()) {
+					return SessionProbe.VALID;
 				}
-				String body = response.text() == null ? "" : response.text().strip();
-				boolean looksLikeJson = body.startsWith("{") || body.startsWith("[");
-				if (!looksLikeJson) {
-					log.info("Session validation stage C failed: cart API returned non-JSON (logged-out) response");
-					return false;
-				}
-				return true;
+				log.info("Session validation stage C failed: cart API returned non-JSON (logged-out) response");
+				return SessionProbe.LOGGED_OUT;
 			}
-			finally {
-				response.dispose();
+			if (response.status() == 401) {
+				log.info("Session validation stage C failed: cart API returned 401");
+				return SessionProbe.LOGGED_OUT;
 			}
+			log.info("Session validation stage C inconclusive: cart API answered {} ({})", response.describe(),
+					response.bodySnippet());
+			return SessionProbe.INCONCLUSIVE;
 		}
 		catch (Exception e) {
 			log.info("Session validation stage C probe failed: {}", e.getMessage());
-			return false;
+			return SessionProbe.INCONCLUSIVE;
 		}
 	}
 
