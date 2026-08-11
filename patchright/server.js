@@ -16,7 +16,7 @@
 //   PATCHRIGHT_HOST      bind host (default 127.0.0.1; use 0.0.0.0 in Docker)
 //   PATCHRIGHT_PORT      fixed port (default: random free port)
 //   PATCHRIGHT_WS_PATH   fixed websocket path (default: random GUID)
-//   PATCHRIGHT_ENABLE_HTTP2   "true" to allow HTTP/2 (default: forced HTTP/1.1)
+//   PATCHRIGHT_DISABLE_HTTP2  "true" to force HTTP/1.1 (default: HTTP/2 allowed)
 
 const { chromium } = require('patchright');
 
@@ -35,11 +35,18 @@ async function main() {
         '--disable-dev-shm-usage',
     ];
 
-    // Zalando's edge breaks Chromium's HTTP/2: navigating to /login fails with
-    // net::ERR_HTTP2_PROTOCOL_ERROR on every attempt (reproduced 2026-08), so
-    // HTTP/1.1 stays forced even though it costs the h2 fingerprint. Set
-    // PATCHRIGHT_ENABLE_HTTP2=true to re-test once the site tolerates h2.
-    if (process.env.PATCHRIGHT_ENABLE_HTTP2 !== 'true') {
+    // Zalando's edge used to break Chromium's HTTP/2 (net::ERR_HTTP2_PROTOCOL_ERROR
+    // navigating to /login, reproduced 2026-08), so HTTP/1.1 was forced as a
+    // workaround. Re-tested 2026-08-11 against the current unified-SSO domain
+    // (accounts.zalando.com) with a bare isolated navigation (no login/credentials
+    // involved): HTTP/2 now navigates cleanly (200, lands on the verify-email
+    // step), twice in a row. The old workaround was actively harmful — forcing
+    // HTTP/1.1 while everything else (UA, viewport, locale) mimics a real Chrome
+    // is itself an Akamai-detectable protocol/ALPN fingerprint mismatch, and is a
+    // likely contributor to the SSO bot-wall (edge_error:halt) that persisted even
+    // after a full cookie/session reset. HTTP/2 is now the default; set
+    // PATCHRIGHT_DISABLE_HTTP2=true to fall back to HTTP/1.1 if this regresses.
+    if (process.env.PATCHRIGHT_DISABLE_HTTP2 === 'true') {
         args.push('--disable-http2');
     }
 
