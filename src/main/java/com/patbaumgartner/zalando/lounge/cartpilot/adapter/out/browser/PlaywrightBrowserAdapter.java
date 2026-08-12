@@ -50,6 +50,13 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	private static final String SIZE_OPTION_SELECTOR = "input[name='size'][data-testid='article-size-toggle']";
 
+	/**
+	 * Zalando's "reserved, check out now" urgency overlay. It covers the whole viewport
+	 * (z-[5000]) and intercepts pointer events, so a size-toggle or add-to-cart click
+	 * issued while it is open times out instead of failing fast.
+	 */
+	private static final String BLOCKING_MODAL_SELECTOR = "[data-testid='lux-modal'][data-status='open']";
+
 	/** Path fragment of the basket write the article page's own button issues. */
 	private static final String STOCKCART_PATH = "/api/phoenix/stockcart/cart";
 
@@ -404,6 +411,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			var basketWrite = recordBasketWrites(page);
 			var addButton = findAddToCartButton(page);
 			if (addButton != null) {
+				dismissBlockingModalIfPresent(page);
 				authService.clickHumanLike(page, addButton);
 			}
 			else {
@@ -551,12 +559,53 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			}
 			String optionSize = label.first().innerText().trim().split("\\R")[0].trim();
 			if (target.equalsIgnoreCase(optionSize)) {
-				authService.clickHumanLike(page, label.first());
+				clickSizeLabel(page, label.first(), productUrl, size);
 				return SizeSelection.SELECTED;
 			}
 		}
 		log.warn("Size '{}' has no selectable label on {}", size, productUrl);
 		return SizeSelection.NOT_OFFERED;
+	}
+
+	/**
+	 * Clicks the size label, dismissing the urgency overlay first if it is already open.
+	 * If the click still times out because the overlay opened mid-click, one retry after
+	 * dismissing it again is enough — the overlay does not reopen once closed.
+	 */
+	private void clickSizeLabel(Page page, Locator label, String productUrl, String size) {
+		dismissBlockingModalIfPresent(page);
+		try {
+			authService.clickHumanLike(page, label);
+		}
+		catch (Exception e) {
+			log.warn("Size click for {} (size {}) was intercepted, retrying after dismissing the overlay: {}",
+					productUrl, size, e.getMessage());
+			dismissBlockingModalIfPresent(page);
+			authService.clickHumanLike(page, label);
+		}
+	}
+
+	/**
+	 * Closes the "reserved, check out now" overlay via Escape if it is open, so a
+	 * following click on the size toggle or add-to-cart button is not swallowed by
+	 * Playwright's actionability retries until the element timeout expires.
+	 */
+	private void dismissBlockingModalIfPresent(Page page) {
+		var modal = page.locator(BLOCKING_MODAL_SELECTOR);
+		try {
+			if (modal.count() == 0 || !modal.first().isVisible()) {
+				return;
+			}
+			log.debug("Dismissing blocking lux-modal before continuing");
+			page.keyboard().press("Escape");
+			modal.first()
+				.waitFor(new Locator.WaitForOptions()
+					.setState(com.microsoft.playwright.options.WaitForSelectorState.HIDDEN)
+					.setTimeout(5_000));
+		}
+		catch (Exception e) {
+			log.debug("Could not dismiss lux-modal: {}", e.getMessage());
+		}
 	}
 
 	/**
@@ -872,7 +921,9 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 		}
 	}
 
-	/** Sleeps, returning {@code false} when the thread was interrupted meanwhile. */
+	/**
+	 * Sleeps, returning {@code false} when the thread was interrupted meanwhile.
+	 */
 	private static boolean sleepQuietly(long millis) {
 		try {
 			Thread.sleep(millis);
