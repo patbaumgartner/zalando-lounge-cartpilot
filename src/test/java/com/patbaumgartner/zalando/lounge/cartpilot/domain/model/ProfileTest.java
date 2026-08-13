@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,6 +32,25 @@ class ProfileTest {
 			var profile = ProfileTestData.aProfile().build();
 
 			assertThat(profile.sizeFor(Category.SWIMWEAR)).isEmpty();
+		}
+
+		@Test
+		@DisplayName("a profile with no sizes at all can be constructed")
+		void supportsProfileWithoutAnySizes() {
+			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(), null,
+					null, null);
+
+			assertThat(profile.sizes()).isEmpty();
+			assertThat(profile.sizeFor(Category.SHOES)).isEmpty();
+		}
+
+		@Test
+		@DisplayName("a first size can be added to a profile that had none")
+		void supportsAddingFirstSize() {
+			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(), null,
+					null, null);
+
+			assertThat(profile.withSize(Category.SHOES, "43").sizeFor(Category.SHOES)).contains("43");
 		}
 
 	}
