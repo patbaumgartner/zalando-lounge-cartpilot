@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -118,6 +120,39 @@ class BrandMatcherTest {
 		void doesNotMatchOnSharedFirstWordOnly() {
 			var profile = ProfileTestData.aProfile().withTier1Brand("Jack & Jones").build();
 			assertThat(matcher.findTier("Jack Wolfskin", profile)).isEmpty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Fuzzy tolerance scales with brand length")
+	class FuzzyTolerance {
+
+		@ParameterizedTest(name = "{0} must not match tier-1 brand {1}")
+		@CsvSource({ "Nine,Nike", "Gas,Gap", "Bogs,Boss", "Hugs,Hugo", "Lowe,Lowa", "Vans,Vaus", "ECCO,ECO" })
+		@DisplayName("short brands within two edits are not treated as the same brand")
+		void rejectsShortNearMisses(String scrapedBrand, String tier1Brand) {
+			var profile = ProfileTestData.aProfile().withTier1Brand(tier1Brand).build();
+
+			assertThat(matcher.findTier(scrapedBrand, profile)).isEmpty();
+		}
+
+		@ParameterizedTest(name = "{0} still matches tier-1 brand {1}")
+		@CsvSource({ "Mamut,Mammut", "Fjallraven,Fjällräven", "Patagonia,Patagonia", "Colombia,Columbia",
+				"Icebraker,Icebreaker" })
+		@DisplayName("longer brands still absorb genuine typos")
+		void acceptsLongerTypos(String scrapedBrand, String tier1Brand) {
+			var profile = ProfileTestData.aProfile().withTier1Brand(tier1Brand).build();
+
+			assertThat(matcher.findTier(scrapedBrand, profile)).contains(BrandTier.TIER_1);
+		}
+
+		@Test
+		@DisplayName("a short listed brand still matches as a word of a longer scraped brand")
+		void shortBrandStillMatchesAsWord() {
+			var profile = ProfileTestData.aProfile().withTier1Brand("Levi").build();
+
+			assertThat(matcher.findTier("Levi's", profile)).contains(BrandTier.TIER_1);
 		}
 
 	}
