@@ -93,10 +93,10 @@ public class TelegramBotHandler {
 	// ── Command handling ───────────────────────────────────────
 
 	private void handleMessage(Message message) {
-		if (message.getFrom().getIsBot()) {
+		if (message.getFrom() == null || Boolean.TRUE.equals(message.getFrom().getIsBot())) {
 			return;
 		}
-		if (!isFromGroup(message)) {
+		if (!isConfiguredGroup(message.getChatId())) {
 			return;
 		}
 
@@ -234,10 +234,15 @@ public class TelegramBotHandler {
 	// ── Callback handling ──────────────────────────────────────
 
 	private void handleCallback(CallbackQuery callback) {
+		var originMessage = callback.getMessage();
+		if (originMessage == null || !isConfiguredGroup(originMessage.getChatId())) {
+			return;
+		}
+
 		String data = callback.getData();
 		String actor = usernameOf(callback.getFrom());
 		String callbackId = callback.getId();
-		String chatId = callback.getMessage().getChatId().toString();
+		String chatId = originMessage.getChatId().toString();
 
 		try {
 			if (data.startsWith("buy:")) {
@@ -260,7 +265,7 @@ public class TelegramBotHandler {
 		}
 		catch (Exception e) {
 			log.error("Error handling callback '{}': {}", data, e.getMessage(), e);
-			answerCallback(callbackId, "❌ Error: " + e.getMessage());
+			answerCallback(callbackId, "❌ Could not complete that action.");
 		}
 	}
 
@@ -445,9 +450,20 @@ public class TelegramBotHandler {
 		}
 	}
 
-	private boolean isFromGroup(Message message) {
-		var type = message.getChat().getType();
-		return "group".equals(type) || "supergroup".equals(type);
+	private boolean isConfiguredGroup(Long chatId) {
+		String configured = properties.telegram().groupChatId();
+		if (configured == null || configured.isBlank()) {
+			log.error("cartpilot.telegram.group-chat-id is not configured — ignoring every inbound update");
+			return false;
+		}
+		if (chatId != null && configured.strip().equals(chatId.toString())) {
+			return true;
+		}
+		// Anyone can add a public bot to their own chat and is that chat's creator — i.e.
+		// its "admin". Binding every inbound update to the one configured group is what
+		// stops a stranger's group from driving this bot's cart and profiles.
+		log.warn("Ignoring update from unconfigured chat {} (configured group is {})", chatId, configured);
+		return false;
 	}
 
 	private boolean isAdmin(Message message) {
