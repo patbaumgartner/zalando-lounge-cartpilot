@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,13 +44,24 @@ public class Profile {
 		this.name = Objects.requireNonNull(name, "name must not be null");
 		this.gender = Objects.requireNonNull(gender, "gender must not be null");
 		this.active = active;
-		this.sizes = Collections.unmodifiableMap(new EnumMap<>(sizes));
-		this.brandTier1 = Collections.unmodifiableList(new ArrayList<>(brandTier1));
-		this.brandTier2 = Collections.unmodifiableList(new ArrayList<>(brandTier2));
-		this.brandAliases = Collections.unmodifiableMap(new HashMap<>(brandAliases));
+		this.sizes = copySizes(sizes);
+		this.brandTier1 = List.copyOf(brandTier1);
+		this.brandTier2 = List.copyOf(brandTier2);
+		this.brandAliases = Map.copyOf(brandAliases);
 		this.maxPriceShoes = maxPriceShoes;
 		this.maxPriceJackets = maxPriceJackets;
 		this.maxPriceClothing = maxPriceClothing;
+	}
+
+	/**
+	 * {@code new EnumMap<>(map)} throws {@link IllegalArgumentException} for an empty map
+	 * that is not already an {@code EnumMap}. Seeding from the key type is safe for any
+	 * input, including a profile with no sizes configured.
+	 */
+	private static Map<Category, String> copySizes(Map<Category, String> sizes) {
+		var copy = new EnumMap<Category, String>(Category.class);
+		copy.putAll(sizes);
+		return Collections.unmodifiableMap(copy);
 	}
 
 	// ── Business behaviour ─────────────────────────────────────
@@ -82,7 +92,8 @@ public class Profile {
 	}
 
 	public Profile withSize(Category category, String size) {
-		var updated = new EnumMap<>(sizes);
+		var updated = new EnumMap<Category, String>(Category.class);
+		updated.putAll(sizes);
 		updated.put(category, size);
 		return new Profile(id, name, gender, active, updated, brandTier1, brandTier2, brandAliases, maxPriceShoes,
 				maxPriceJackets, maxPriceClothing);
