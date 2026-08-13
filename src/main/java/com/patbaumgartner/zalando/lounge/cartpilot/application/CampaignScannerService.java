@@ -59,12 +59,14 @@ public class CampaignScannerService {
 
 	private final CartPilotProperties properties;
 
+	private final BrowserGate browserGate;
+
 	private final AtomicBoolean scanInProgress = new AtomicBoolean(false);
 
 	public CampaignScannerService(BrowserPort browser, ProfilePort profilePort,
 			DiscoveredProductPort discoveredProductPort, KnownBrandPort knownBrandPort,
 			PurchasedItemPort purchasedItemPort, ProductFilter filterService, CartService cartService,
-			NotificationPort notification, CartPilotProperties properties) {
+			NotificationPort notification, CartPilotProperties properties, BrowserGate browserGate) {
 		this.browser = browser;
 		this.profilePort = profilePort;
 		this.discoveredProductPort = discoveredProductPort;
@@ -74,6 +76,7 @@ public class CampaignScannerService {
 		this.cartService = cartService;
 		this.notification = notification;
 		this.properties = properties;
+		this.browserGate = browserGate;
 	}
 
 	public void scan() {
@@ -81,7 +84,15 @@ public class CampaignScannerService {
 			log.warn("Scan already in progress, skipping overlapping trigger");
 			return;
 		}
+		try {
+			browserGate.runExclusively("daily scan", this::runScan);
+		}
+		finally {
+			scanInProgress.set(false);
+		}
+	}
 
+	private void runScan() {
 		var startedAt = Instant.now();
 		var notes = new ArrayList<String>();
 		try {
@@ -181,9 +192,6 @@ public class CampaignScannerService {
 			log.error("Scan failed", e);
 			notification.sendGroupMessage("🚨 Scan failed — %s: %s".formatted(e.getClass().getSimpleName(),
 					e.getMessage() == null ? "no message" : e.getMessage()));
-		}
-		finally {
-			scanInProgress.set(false);
 		}
 	}
 

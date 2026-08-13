@@ -247,8 +247,9 @@ class CampaignScraper {
 
 	/**
 	 * Throttles catalog article requests to at most one per
-	 * {@link #ARTICLE_MIN_INTERVAL_MS}. Runs on the single scan thread, so no
-	 * synchronization is needed.
+	 * {@link #ARTICLE_MIN_INTERVAL_MS}. Only ever reached through
+	 * {@code PlaywrightBrowserAdapter}'s {@code synchronized} entry points, so
+	 * {@code lastArticleRequestAtNanos} needs no further guarding.
 	 */
 	private void paceArticleRequest() {
 		long now = System.nanoTime();

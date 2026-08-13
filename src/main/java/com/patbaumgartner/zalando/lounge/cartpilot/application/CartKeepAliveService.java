@@ -53,15 +53,18 @@ public class CartKeepAliveService {
 
 	private final CartPilotProperties properties;
 
+	private final BrowserGate browserGate;
+
 	public CartKeepAliveService(ProductReservationPort reservationPort, DiscoveredProductPort productPort,
-			ProfilePort profilePort, BrowserPort browser, NotificationPort notification,
-			CartPilotProperties properties) {
+			ProfilePort profilePort, BrowserPort browser, NotificationPort notification, CartPilotProperties properties,
+			BrowserGate browserGate) {
 		this.reservationPort = reservationPort;
 		this.productPort = productPort;
 		this.profilePort = profilePort;
 		this.browser = browser;
 		this.notification = notification;
 		this.properties = properties;
+		this.browserGate = browserGate;
 	}
 
 	public void keepAlive() {
@@ -69,7 +72,12 @@ public class CartKeepAliveService {
 		if (inCartReservations.isEmpty()) {
 			return;
 		}
+		// Never queue behind a scan: a scan replaces the whole basket, so by the time it
+		// releases the browser these holds are gone and refreshing them is meaningless.
+		browserGate.tryRunExclusively("cart keep-alive", () -> refreshAll(inCartReservations));
+	}
 
+	private void refreshAll(List<ProductReservation> inCartReservations) {
 		log.atDebug().addArgument(() -> inCartReservations.size()).log("Keep-alive check for {} cart item(s)");
 
 		int maxHours = properties.cart().maxKeepAliveHours();

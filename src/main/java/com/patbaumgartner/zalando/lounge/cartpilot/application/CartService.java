@@ -49,9 +49,11 @@ public class CartService {
 
 	private final CartPilotProperties properties;
 
+	private final BrowserGate browserGate;
+
 	public CartService(BrowserPort browser, ProductReservationPort reservationPort, DiscoveredProductPort productPort,
 			ProfilePort profilePort, PurchasedItemPort purchasedItemPort, NotificationPort notification,
-			CartPilotProperties properties) {
+			CartPilotProperties properties, BrowserGate browserGate) {
 		this.browser = browser;
 		this.reservationPort = reservationPort;
 		this.productPort = productPort;
@@ -59,6 +61,7 @@ public class CartService {
 		this.purchasedItemPort = purchasedItemPort;
 		this.notification = notification;
 		this.properties = properties;
+		this.browserGate = browserGate;
 	}
 
 	/**
@@ -67,6 +70,10 @@ public class CartService {
 	 * the item stays on the link list for a manual grab.
 	 */
 	public CartAddResult addToCart(FilterResult result) {
+		return browserGate.runExclusively("cart add", () -> doAddToCart(result));
+	}
+
+	private CartAddResult doAddToCart(FilterResult result) {
 		var product = result.product();
 		var profile = result.profile();
 
@@ -149,6 +156,10 @@ public class CartService {
 	 * reservation as rejected.
 	 */
 	public void handleSkip(Long reservationId, String actorUsername) {
+		browserGate.runExclusively("skip", () -> doHandleSkip(reservationId, actorUsername));
+	}
+
+	private void doHandleSkip(Long reservationId, String actorUsername) {
 		var reservation = reservationPort.findById(reservationId)
 			.orElseThrow(() -> new IllegalArgumentException("Unknown reservation: " + reservationId));
 
@@ -178,6 +189,10 @@ public class CartService {
 	 * Clears the full browser cart and marks all IN_CART reservations as REJECTED.
 	 */
 	public ClearCartResult clearCart(String actorUsername) {
+		return browserGate.runExclusively("clear cart", () -> doClearCart(actorUsername));
+	}
+
+	private ClearCartResult doClearCart(String actorUsername) {
 		int browserRemoved = browser.clearCart();
 		var inCartReservations = reservationPort.findByStatus(ReservationStatus.IN_CART);
 
