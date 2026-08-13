@@ -189,7 +189,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public List<Campaign> fetchTodayCampaigns() {
+	public synchronized List<Campaign> fetchTodayCampaigns() {
 		return campaignScraper.scrapeOpenCampaigns(apiPage(), properties.zalando().campaignUrl());
 	}
 
@@ -199,12 +199,12 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	 * origin, which the catalog API rejects as cross-origin.
 	 */
 	@Override
-	public List<DiscoveredProduct> scrapeProducts(Campaign campaign) {
+	public synchronized List<DiscoveredProduct> scrapeProducts(Campaign campaign) {
 		return campaignScraper.scrapeProducts(apiPage(), campaign);
 	}
 
 	@Override
-	public ProductDetails fetchProductDetails(String productUrl) {
+	public synchronized ProductDetails fetchProductDetails(String productUrl) {
 		try {
 			ProductDetails apiDetails = fetchProductDetailsViaApi(productUrl);
 			if (apiDetails != null) {
@@ -364,7 +364,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public CartAddResult addToCart(String productUrl, String size) {
+	public synchronized CartAddResult addToCart(String productUrl, String size) {
 		String campaignId = campaignId(productUrl);
 		String configSku = articleId(productUrl);
 		if (campaignId == null || configSku == null) {
@@ -735,7 +735,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public void removeFromCart(String productUrl) {
+	public synchronized void removeFromCart(String productUrl) {
 		try {
 			String articleId = articleId(productUrl);
 			if (articleId == null || articleId.isBlank()) {
@@ -767,7 +767,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public boolean isItemInCart(String productUrl) {
+	public synchronized boolean isItemInCart(String productUrl) {
 		try {
 			String articleId = articleId(productUrl);
 			if (articleId == null || articleId.isBlank()) {
@@ -782,7 +782,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public CartAddResult refreshCartItem(String productUrl, String size) {
+	public synchronized CartAddResult refreshCartItem(String productUrl, String size) {
 		try {
 			// Removing and re-adding the article mutates the basket, which resets
 			// Zalando's server-side reservation timer — a plain presence check does not.
@@ -823,7 +823,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public int clearCart() {
+	public synchronized int clearCart() {
 		try {
 			var snapshot = readCart();
 			if (!snapshot.readable()) {
@@ -938,8 +938,8 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	/**
 	 * Blocks until at least {@link #SIZE_API_MIN_INTERVAL_MS} has elapsed since the
 	 * previous article-document request, smoothing the burst rate so Akamai's rate
-	 * limiter stays quiet. Called on the single scan thread, so no synchronization is
-	 * needed.
+	 * limiter stays quiet. Only ever reached from a {@code synchronized} entry point, so
+	 * {@code lastApiRequestAtNanos} needs no further guarding.
 	 */
 	private void paceApiRequest() {
 		long now = System.nanoTime();

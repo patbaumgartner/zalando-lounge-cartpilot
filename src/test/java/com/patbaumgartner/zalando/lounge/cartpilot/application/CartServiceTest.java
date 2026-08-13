@@ -66,7 +66,7 @@ class CartServiceTest {
 	void setUp() {
 		var properties = mockProperties(20);
 		cartService = new CartService(browser, reservationPort, productPort, profilePort, purchasedItemPort,
-				notification, properties);
+				notification, properties, new BrowserGate());
 	}
 
 	@Nested

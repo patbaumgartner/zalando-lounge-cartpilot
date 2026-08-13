@@ -76,7 +76,7 @@ class CampaignScannerServiceTest {
 		when(zalandoProps.retryIntervalSeconds()).thenReturn(1);
 
 		service = new CampaignScannerService(browser, profilePort, discoveredProductPort, knownBrandPort,
-				purchasedItemPort, productFilter, cartService, notification, properties);
+				purchasedItemPort, productFilter, cartService, notification, properties, new BrowserGate());
 	}
 
 	@Nested

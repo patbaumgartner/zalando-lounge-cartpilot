@@ -58,7 +58,7 @@ class CartKeepAliveServiceTest {
 	void setUp() {
 		var props = buildProperties(2, 20);
 		keepAliveService = new CartKeepAliveService(reservationPort, productPort, profilePort, browser, notification,
-				props);
+				props, new BrowserGate());
 	}
 
 	@Test
