@@ -14,7 +14,9 @@ import java.util.Optional;
  * <ol>
  * <li>Exact match on an accent-folded, alphanumeric-only form (so {@code Fjällräven} ==
  * {@code Fjallraven} and {@code Arc'teryx} == {@code Arcteryx}).</li>
- * <li>Fuzzy match via Levenshtein ≤ 2 to absorb typos (e.g. {@code Mamut}).</li>
+ * <li>Fuzzy match via a length-scaled Levenshtein tolerance to absorb typos (e.g.
+ * {@code Mamut}); names shorter than {@value #FUZZY_MIN_LENGTH} characters must match
+ * exactly.</li>
  * <li>"Similar" match where one brand's words form a contiguous run inside the other
  * (e.g. {@code North Face} ⊂ {@code The North Face}, {@code Salomon} ⊂
  * {@code Salomon S-Lab}).</li>
@@ -24,7 +26,15 @@ import java.util.Optional;
  */
 public class BrandMatcher {
 
-	private static final int MAX_EDIT_DISTANCE = 2;
+	/** Shortest normalised form that may be fuzzy-matched at all. */
+	private static final int FUZZY_MIN_LENGTH = 5;
+
+	/** From this length on, two edits are safe. */
+	private static final int LONG_BRAND_LENGTH = 8;
+
+	private static final int MAX_EDIT_DISTANCE_MEDIUM = 1;
+
+	private static final int MAX_EDIT_DISTANCE_LONG = 2;
 
 	/** Single-word "similar" matches must be at least this long to avoid noise. */
 	private static final int MIN_SINGLE_WORD_LENGTH = 4;
@@ -66,13 +76,36 @@ public class BrandMatcher {
 		if (a.equals(b)) {
 			return true;
 		}
-		if (LevenshteinDistance.compute(a, b) <= MAX_EDIT_DISTANCE) {
+		if (isWithinEditDistance(a, b)) {
 			return true;
 		}
 		// "Similar" brands: one name's words appear as a contiguous run in the other.
 		List<String> wordsA = words(rawA);
 		List<String> wordsB = words(rawB);
 		return containsSequence(wordsA, wordsB) || containsSequence(wordsB, wordsA);
+	}
+
+	/**
+	 * Fuzzy matching tolerance scales with the shorter name's length. A flat tolerance of
+	 * two edits made unrelated short brands equal — {@code Nike}/{@code Nine},
+	 * {@code Gap}/{@code Gas}, {@code Lowa}/{@code Lowe} are all within two edits — and a
+	 * tier-1 false positive silently buys the wrong article. Below
+	 * {@link #FUZZY_MIN_LENGTH} characters only an exact match counts; the word-subset
+	 * rule still covers legitimate short forms such as {@code Levi} in {@code Levi's}.
+	 */
+	private boolean isWithinEditDistance(String a, String b) {
+		int allowed = maxEditDistanceFor(Math.min(a.length(), b.length()));
+		if (allowed == 0 || Math.abs(a.length() - b.length()) > allowed) {
+			return false;
+		}
+		return LevenshteinDistance.compute(a, b) <= allowed;
+	}
+
+	private static int maxEditDistanceFor(int shortestLength) {
+		if (shortestLength < FUZZY_MIN_LENGTH) {
+			return 0;
+		}
+		return shortestLength < LONG_BRAND_LENGTH ? MAX_EDIT_DISTANCE_MEDIUM : MAX_EDIT_DISTANCE_LONG;
 	}
 
 	/**
