@@ -10,9 +10,11 @@ public interface PurchasedItemPort {
 	boolean hasProfilePurchasedProduct(Long profileId, Long productId);
 
 	/**
-	 * Returns all product IDs purchased by a profile (used for bulk gate checks).
+	 * Returns the stable article keys a profile has already bought, for the
+	 * already-purchased gate. Keyed on the article rather than the discovered-product row
+	 * because every scan re-inserts its products with fresh ids.
 	 */
-	Set<Long> findProductIdsByProfileId(Long profileId);
+	Set<String> findPurchasedArticleKeysByProfileId(Long profileId);
 
 	PurchasedItem save(PurchasedItem item);
 

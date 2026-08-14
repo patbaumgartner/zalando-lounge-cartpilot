@@ -1,10 +1,12 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.persistence;
 
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.PurchasedItem;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.PurchasedItemPort;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 class PurchasedItemPersistenceAdapter implements PurchasedItemPort {
@@ -21,8 +23,12 @@ class PurchasedItemPersistenceAdapter implements PurchasedItemPort {
 	}
 
 	@Override
-	public Set<Long> findProductIdsByProfileId(Long profileId) {
-		return Set.copyOf(repository.findProductIdsByProfileId(profileId));
+	public Set<String> findPurchasedArticleKeysByProfileId(Long profileId) {
+		return repository.findPurchasedProductUrlsByProfileId(profileId)
+			.stream()
+			.map(DiscoveredProduct::articleKeyOf)
+			.filter(key -> !key.isBlank())
+			.collect(Collectors.toUnmodifiableSet());
 	}
 
 	@Override
