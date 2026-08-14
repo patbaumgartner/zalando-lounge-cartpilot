@@ -299,22 +299,15 @@ public class TelegramBotHandler {
 	private List<NotificationPort.ProductLink> linksFor(ReservationStatus status, Map<Long, String> profileNames,
 			String note) {
 		var entries = new ArrayList<NotificationPort.ProductLink>();
-		for (var reservation : reservationPort.findByStatus(status)) {
-			// Reservations are never purged, so without a date bound the list would grow
-			// with every past scan and bury today's actually-buyable items.
-			if (!isFromToday(reservation)) {
-				continue;
-			}
+		// Reservations are never purged, so without a date bound the list would grow
+		// with every past scan and bury today's actually-buyable items.
+		for (var reservation : reservationPort.findByStatusCreatedOn(status, LocalDate.now())) {
 			productPort.findById(reservation.productId())
 				.ifPresent(product -> entries.add(NotificationPort.ProductLink.of(reservation,
 						profileNames.getOrDefault(reservation.profileId(), "unknown"), product,
 						noteFor(reservation, note))));
 		}
 		return entries;
-	}
-
-	private static boolean isFromToday(ProductReservation reservation) {
-		return reservation.createdAt() != null && reservation.createdAt().toLocalDate().equals(LocalDate.now());
 	}
 
 	private String noteFor(ProductReservation reservation, String fallback) {
@@ -329,7 +322,7 @@ public class TelegramBotHandler {
 	}
 
 	private String buildDebugText() {
-		var counts = countsByStatus();
+		var counts = reservationPort.countByStatus();
 		var zalando = properties.zalando();
 		var scheduler = properties.scheduler();
 
@@ -355,12 +348,6 @@ public class TelegramBotHandler {
 		sb.append("  Cart expiry: ").append(properties.cart().expiryMinutes()).append(" min\n");
 		sb.append("  Max keep-alive: ").append(properties.cart().maxKeepAliveHours()).append(" h");
 		return sb.toString();
-	}
-
-	private Map<ReservationStatus, Long> countsByStatus() {
-		return Arrays.stream(ReservationStatus.values())
-			.collect(Collectors.toMap(Function.identity(), status -> (long) reservationPort.findByStatus(status).size(),
-					(a, b) -> a));
 	}
 
 	private String buildStatusText() {

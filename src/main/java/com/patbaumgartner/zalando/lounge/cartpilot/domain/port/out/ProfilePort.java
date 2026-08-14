@@ -12,6 +12,8 @@ public interface ProfilePort {
 
 	List<Profile> findAll();
 
+	Optional<Profile> findById(Long id);
+
 	Optional<Profile> findByName(String name);
 
 	Profile save(Profile profile);

@@ -150,12 +150,7 @@ public class CartKeepAliveService {
 	}
 
 	private String profileName(Long profileId) {
-		return profilePort.findAll()
-			.stream()
-			.filter(p -> p.id().equals(profileId))
-			.map(Profile::name)
-			.findFirst()
-			.orElse("unknown");
+		return profilePort.findById(profileId).map(Profile::name).orElse("unknown");
 	}
 
 }
