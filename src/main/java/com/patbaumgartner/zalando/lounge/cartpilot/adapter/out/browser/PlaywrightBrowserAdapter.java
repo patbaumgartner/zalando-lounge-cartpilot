@@ -20,6 +20,7 @@ import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductDetails;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -140,7 +141,17 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 	private long lastApiRequestAtNanos;
 
-	public PlaywrightBrowserAdapter(Playwright playwright, Browser browser, AuthenticationService authService,
+	@Autowired
+	public PlaywrightBrowserAdapter(Playwright playwright, AuthenticationService authService,
+			CampaignScraper campaignScraper, CartPilotProperties properties, ObjectMapper objectMapper) {
+		this(playwright, null, authService, campaignScraper, properties, objectMapper);
+	}
+
+	/**
+	 * Takes an already-connected {@code Browser}. Only tests use this: they drive a
+	 * locally launched Chromium instead of the Patchright sidecar.
+	 */
+	PlaywrightBrowserAdapter(Playwright playwright, Browser browser, AuthenticationService authService,
 			CampaignScraper campaignScraper, CartPilotProperties properties, ObjectMapper objectMapper) {
 		this.playwright = playwright;
 		this.browser = browser;
