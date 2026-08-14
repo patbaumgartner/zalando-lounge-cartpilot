@@ -26,13 +26,13 @@ class CartApi {
 
 	private static final Logger log = LoggerFactory.getLogger(CartApi.class);
 
-	private final InPageHttpClient http;
+	private final PageHttpClient http;
 
 	private final ObjectMapper objectMapper;
 
 	private final String cartApiUrl;
 
-	CartApi(InPageHttpClient http, ObjectMapper objectMapper, String cartApiUrl) {
+	CartApi(PageHttpClient http, ObjectMapper objectMapper, String cartApiUrl) {
 		this.http = http;
 		this.objectMapper = objectMapper;
 		this.cartApiUrl = cartApiUrl;
@@ -96,9 +96,15 @@ class CartApi {
 			return CartSnapshot.unreadable(response.status());
 		}
 		try {
-			JsonNode items = objectMapper.readTree(body).path("items");
+			JsonNode root = objectMapper.readTree(body);
+			JsonNode items = root.path("items");
 			if (!items.isArray()) {
-				return new CartSnapshot(true, response.status(), List.of());
+				// A basket document with no items array is not an empty basket, it is a
+				// shape this code does not understand. Reporting it as empty would let a
+				// schema change silently confirm adds that never happened and let a
+				// clear release live reservations.
+				log.warn("Cart API returned a JSON document with no items array — treating the basket as unreadable");
+				return CartSnapshot.unreadable(response.status());
 			}
 			var cartItems = new ArrayList<CartItem>();
 			for (JsonNode item : items) {

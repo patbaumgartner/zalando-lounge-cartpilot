@@ -83,14 +83,18 @@ class CampaignScraper {
 
 	private final AuthenticationService authenticationService;
 
-	private final InPageHttpClient http;
+	private final PageHttpClient http;
 
 	private long lastArticleRequestAtNanos;
 
 	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService) {
+		this(objectMapper, authenticationService, new InPageHttpClient(API_TIMEOUT_MS));
+	}
+
+	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService, PageHttpClient http) {
 		this.objectMapper = objectMapper;
 		this.authenticationService = authenticationService;
-		this.http = new InPageHttpClient(API_TIMEOUT_MS);
+		this.http = http;
 	}
 
 	/**
@@ -130,6 +134,7 @@ class CampaignScraper {
 	List<DiscoveredProduct> scrapeProducts(Page page, Campaign campaign) {
 		String origin = origin(campaign.campaignUrl().isBlank() ? DEFAULT_ORIGIN : campaign.campaignUrl());
 		var products = new ArrayList<DiscoveredProduct>();
+		int skipped = 0;
 
 		for (int pageNo = 0; pageNo < MAX_ARTICLE_PAGES; pageNo++) {
 			var articles = fetchArticlePage(page, origin, campaign.campaignId(), pageNo);
@@ -141,12 +146,24 @@ class CampaignScraper {
 					products.add(toDiscoveredProduct(article, campaign, origin));
 				}
 				catch (Exception e) {
+					skipped++;
 					log.debug("Skipped unparseable article in campaign {}: {}", campaign.campaignId(), e.getMessage());
 				}
 			}
 			if (articles.size() < ARTICLE_PAGE_SIZE) {
 				break;
 			}
+			if (pageNo == MAX_ARTICLE_PAGES - 1) {
+				log.warn("Campaign {} filled all {} article pages — later articles were not scanned",
+						campaign.campaignId(), MAX_ARTICLE_PAGES);
+			}
+		}
+
+		// A field rename on Zalando's side makes every article unparseable at once.
+		// Without this the whole campaign just looks empty, at debug level.
+		if (skipped > products.size()) {
+			log.warn("Campaign {} skipped {} unparseable article(s) and kept only {} — the catalog shape may have "
+					+ "changed", campaign.campaignId(), skipped, products.size());
 		}
 
 		log.atInfo()
@@ -271,6 +288,12 @@ class CampaignScraper {
 		var sizes = CatalogArticleSupport.availableSizes(article.path("simples"));
 		var originalPrice = CatalogArticleSupport.centsToAmount(article.path("price"));
 		var loungePrice = CatalogArticleSupport.centsToAmount(article.path("specialPrice"));
+		// A missing or unparseable price reads as CHF 0.00, which is under every
+		// configured cap — a tier-1 brand would then be auto-reserved on the strength of
+		// a price the shop never quoted.
+		if (loungePrice.signum() <= 0) {
+			throw new IllegalArgumentException("article has no usable lounge price");
+		}
 		int discountPct = article.path("savings").isNumber() ? article.path("savings").asInt()
 				: computeDiscount(originalPrice, loungePrice);
 		String productUrl = resolveProductUrl(article, origin, campaign);
