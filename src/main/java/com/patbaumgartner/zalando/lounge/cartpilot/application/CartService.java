@@ -82,15 +82,22 @@ public class CartService {
 
 		var addResult = browser.addToCart(product.productUrl(), result.size());
 		if (!addResult.isAdded()) {
-			if (addResult.isBlocked()) {
-				log.warn("Bot protection blocked {} (size {}) — {}", product.name(), result.size(),
-						addResult.describe());
-				reservation.markBlocked();
-			}
-			else {
-				log.warn("Could not confirm {} (size {}) in cart — {}", product.name(), result.size(),
-						addResult.describe());
-				reservation.markOutOfStock();
+			switch (addResult.outcome()) {
+				case BLOCKED -> {
+					log.warn("Bot protection blocked {} (size {}) — {}", product.name(), result.size(),
+							addResult.describe());
+					reservation.markBlocked();
+				}
+				case SIZE_UNAVAILABLE -> {
+					log.info("Size {} of {} is no longer purchasable — {}", result.size(), product.name(),
+							addResult.describe());
+					reservation.markOutOfStock();
+				}
+				default -> {
+					log.warn("Could not confirm {} (size {}) in cart — {}", product.name(), result.size(),
+							addResult.describe());
+					reservation.markFailed();
+				}
 			}
 			reservationPort.save(reservation);
 			return addResult;
@@ -166,11 +173,13 @@ public class CartService {
 		var product = productPort.findById(reservation.productId())
 			.orElseThrow(() -> new IllegalStateException("Product not found"));
 
+		boolean stillInBasket = false;
 		if (reservation.isInCart()) {
 			try {
-				browser.removeFromCart(product.productUrl());
+				stillInBasket = !browser.removeFromCart(product.productUrl());
 			}
 			catch (Exception e) {
+				stillInBasket = true;
 				log.error("Could not remove {} from cart: {}", product.name(), e.getMessage(), e);
 			}
 		}
@@ -179,6 +188,11 @@ public class CartService {
 		reservationPort.update(reservation);
 
 		String msg = "❌ @%s skipped %s".formatted(actorUsername, product.name());
+		if (stillInBasket) {
+			// Silently dropping this leaves an item in the basket that nothing tracks
+			// any more, blocking the slot until someone notices it by hand.
+			msg += " — ⚠️ it could not be removed from the basket, check it manually";
+		}
 		if (reservation.telegramMsgId() != null) {
 			notification.updateGroupMessage(reservation.telegramMsgId(), msg);
 		}
@@ -193,7 +207,14 @@ public class CartService {
 	}
 
 	private ClearCartResult doClearCart(String actorUsername) {
-		int browserRemoved = browser.clearCart();
+		var cleared = browser.clearCart();
+		if (!cleared.cartReadable()) {
+			// Releasing every reservation here would write off holds that are still
+			// standing: the basket was never read, so nothing is known to have gone.
+			log.warn("Cart clear by @{} left reservations untouched — {}", actorUsername, cleared.describe());
+			return new ClearCartResult(0, 0, false);
+		}
+
 		var inCartReservations = reservationPort.findByStatus(ReservationStatus.IN_CART);
 
 		int updatedReservations = 0;
@@ -209,14 +230,25 @@ public class CartService {
 
 		log.atInfo()
 			.addArgument(actorUsername)
-			.addArgument(browserRemoved)
+			.addArgument(cleared.removedCount())
 			.addArgument(updatedReservations)
 			.log("Cart cleared by @{} (browser removed: {}, reservations updated: {})");
 
-		return new ClearCartResult(browserRemoved, updatedReservations);
+		return new ClearCartResult(cleared.removedCount(), updatedReservations, true);
 	}
 
-	public record ClearCartResult(int browserRemovedCount, int reservationsUpdatedCount) {
+	/**
+	 * @param cartReadable {@code false} when the basket could not be read, in which case
+	 * nothing was cleared and no reservation was released
+	 */
+	public record ClearCartResult(int browserRemovedCount, int reservationsUpdatedCount, boolean cartReadable) {
+
+		public String describe() {
+			return cartReadable
+					? "browser removed %d item(s); updated %d reservation(s)".formatted(browserRemovedCount,
+							reservationsUpdatedCount)
+					: "the basket could not be read — nothing was cleared and no reservation was released";
+		}
 	}
 
 }

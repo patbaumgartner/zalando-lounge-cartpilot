@@ -131,9 +131,12 @@ public class TelegramBotHandler {
 				Thread.ofVirtual().name("manual-scan").start(scannerService::scan);
 			}
 			else if (text.startsWith("/clear") && isAdmin) {
-				var result = cartService.clearCart(actorUsername);
-				replySender.send("🧹 Cleared cart. Browser removed %d item(s); updated %d reservation(s)."
-					.formatted(result.browserRemovedCount(), result.reservationsUpdatedCount()));
+				// The browser may be mid-scan for minutes; blocking here would stall
+				// every other command, because updates are consumed one at a time.
+				replySender.send("🧹 Clearing cart...");
+				Thread.ofVirtual()
+					.name("manual-clear")
+					.start(() -> replySender.send("🧹 " + cartService.clearCart(actorUsername).describe()));
 			}
 			else if (!isAdmin && (text.startsWith("/scan") || text.startsWith("/clear") || text.startsWith("/profile")
 					|| text.startsWith("/profiles"))) {

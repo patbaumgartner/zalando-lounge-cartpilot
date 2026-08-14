@@ -210,6 +210,7 @@ public class TelegramMessageFormatter {
 			case EXPIRED -> "⌛";
 			case OUT_OF_STOCK -> "🚫";
 			case BLOCKED -> "🛡";
+			case FAILED -> "⚠️";
 			case PENDING -> "👀";
 		};
 	}

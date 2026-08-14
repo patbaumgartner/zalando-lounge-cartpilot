@@ -82,6 +82,11 @@ public class ProductReservation {
 		this.status = ReservationStatus.OUT_OF_STOCK;
 	}
 
+	/** The basket call failed for a reason that says nothing about availability. */
+	public void markFailed() {
+		this.status = ReservationStatus.FAILED;
+	}
+
 	/**
 	 * The size was in stock but the shop's bot protection refused the basket call, so
 	 * this stays a live lead for a manual grab rather than a write-off.

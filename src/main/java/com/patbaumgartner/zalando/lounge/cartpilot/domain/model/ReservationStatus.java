@@ -9,7 +9,15 @@ public enum ReservationStatus {
 	 * basket call. It never made it into the cart and has to be grabbed by hand — so it
 	 * stays on the link list instead of being written off as sold out.
 	 */
-	BLOCKED;
+	BLOCKED,
+
+	/**
+	 * The basket call failed for a reason that says nothing about stock — a transport
+	 * error, an unparseable response, or an unexpected status. Kept distinct from
+	 * {@link #OUT_OF_STOCK} so a broken scan is not silently reported as a sold-out
+	 * article.
+	 */
+	FAILED;
 
 	/**
 	 * Statuses whose product is still worth opening in the browser: either it is held for

@@ -36,6 +36,7 @@ import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -43,6 +44,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -404,14 +406,34 @@ class TelegramBotHandlerTest {
 		}
 
 		@Test
-		@DisplayName("/clear clears cart via service and replies with summary")
-		void clearTriggersCartClear() throws TelegramApiException {
-			when(cartService.clearCart("testuser")).thenReturn(new CartService.ClearCartResult(2, 2));
+		@DisplayName("/clear clears cart via service in a background thread and replies with the outcome")
+		void clearTriggersCartClear() throws Exception {
+			var latch = new CountDownLatch(1);
+			when(cartService.clearCart("testuser")).thenAnswer(invocation -> {
+				latch.countDown();
+				return new CartService.ClearCartResult(2, 2, true);
+			});
 
 			handler.onUpdateReceived(groupTextUpdate("/clear"));
 
+			assertTrue(latch.await(2, TimeUnit.SECONDS), "Expected async cart clear to be triggered");
 			verify(cartService).clearCart("testuser");
-			assertSentMessageContains("Cleared cart");
+			assertSentMessageContains("Clearing cart");
+		}
+
+		@Test
+		@DisplayName("/clear reports that nothing was released when the basket could not be read")
+		void clearReportsUnreadableBasket() throws Exception {
+			var latch = new CountDownLatch(1);
+			when(cartService.clearCart("testuser")).thenAnswer(invocation -> {
+				latch.countDown();
+				return new CartService.ClearCartResult(0, 0, false);
+			});
+
+			handler.onUpdateReceived(groupTextUpdate("/clear"));
+
+			assertTrue(latch.await(2, TimeUnit.SECONDS), "Expected async cart clear to be triggered");
+			await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertSentMessageContains("could not be read"));
 		}
 
 		@Test
