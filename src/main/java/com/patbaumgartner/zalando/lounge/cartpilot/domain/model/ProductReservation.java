@@ -103,6 +103,10 @@ public class ProductReservation {
 		return status == ReservationStatus.IN_CART;
 	}
 
+	public boolean isPurchaseInitiated() {
+		return status == ReservationStatus.PURCHASE_INITIATED;
+	}
+
 	// ── Accessors ──────────────────────────────────────────────
 
 	public Long id() {
