@@ -9,6 +9,7 @@ import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduc
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -87,10 +88,12 @@ class CampaignScraper {
 
 	private long lastArticleRequestAtNanos;
 
+	@Autowired
 	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService) {
 		this(objectMapper, authenticationService, new InPageHttpClient(API_TIMEOUT_MS));
 	}
 
+	/** Takes a scripted transport. Only tests use this. */
 	CampaignScraper(ObjectMapper objectMapper, AuthenticationService authenticationService, PageHttpClient http) {
 		this.objectMapper = objectMapper;
 		this.authenticationService = authenticationService;

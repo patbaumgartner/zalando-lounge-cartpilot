@@ -6,7 +6,6 @@ import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.FileSystems;
 import java.util.Collections;
 
-import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.Playwright;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +13,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
+/**
+ * Playwright wiring.
+ *
+ * <p>
+ * No {@code Browser} bean is defined on purpose. Connecting to the Patchright sidecar at
+ * startup made the whole application refuse to boot whenever that sidecar was not yet
+ * accepting connections — a plain compose start races it, and every sidecar restart took
+ * the app down with it. {@code PlaywrightBrowserAdapter} has to reconnect on demand
+ * regardless, because the sidecar drops idle connections, so it owns the connection.
+ */
 @Configuration
 public class PlaywrightConfiguration {
 
@@ -21,9 +30,14 @@ public class PlaywrightConfiguration {
 
 	@Bean
 	@Profile("!test")
-	public Playwright playwright() {
+	public Playwright playwright(CartPilotProperties properties) {
+		String ws = properties.zalando().browserWsEndpoint();
+		if (ws == null || ws.isBlank()) {
+			throw new IllegalStateException("cartpilot.zalando.browser-ws-endpoint must point to the Patchright server "
+					+ "(e.g. ws://patchright:3000/cartpilot). Start it via 'docker compose up patchright'.");
+		}
 		ensureNativeImageResourceFileSystem();
-		log.info("Initialising Playwright");
+		log.info("Initialising Playwright; Patchright browser server is {}", ws);
 		return Playwright.create();
 	}
 
@@ -46,22 +60,6 @@ public class PlaywrightConfiguration {
 			// Running on the JVM (no "resource" provider) or not needed.
 			log.debug("Skipping native-image resource file system init: {}", ex.getMessage());
 		}
-	}
-
-	@Bean
-	@Profile("!test")
-	public Browser browser(Playwright playwright, CartPilotProperties properties) {
-		// Patchright (undetected Chromium) has no Java binding, so it runs as a
-		// separate
-		// browser server (the "patchright" docker-compose service). The Java client
-		// connects to it over the Playwright wire protocol.
-		String ws = properties.zalando().browserWsEndpoint();
-		if (ws == null || ws.isBlank()) {
-			throw new IllegalStateException("cartpilot.zalando.browser-ws-endpoint must point to the Patchright server "
-					+ "(e.g. ws://patchright:3000/cartpilot). Start it via 'docker compose up patchright'.");
-		}
-		log.info("Connecting to Patchright browser server at {}", ws);
-		return playwright.chromium().connect(ws);
 	}
 
 }
