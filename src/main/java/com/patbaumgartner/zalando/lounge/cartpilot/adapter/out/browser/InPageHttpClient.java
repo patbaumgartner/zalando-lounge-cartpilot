@@ -28,7 +28,7 @@ import java.util.Map;
  * {@code Origin}, {@code Referer}, {@code Cookie} and {@code Sec-*} are forbidden header
  * names that the browser must fill in itself.
  */
-class InPageHttpClient {
+class InPageHttpClient implements PageHttpClient {
 
 	private static final Logger log = LoggerFactory.getLogger(InPageHttpClient.class);
 
@@ -67,15 +67,18 @@ class InPageHttpClient {
 		this.timeoutMs = (int) Math.min(Integer.MAX_VALUE, timeoutMs > 0 ? timeoutMs : 30_000L);
 	}
 
-	InPageResponse get(Page page, String url) {
+	@Override
+	public InPageResponse get(Page page, String url) {
 		return send(page, url, "GET", null);
 	}
 
-	InPageResponse delete(Page page, String url) {
+	@Override
+	public InPageResponse delete(Page page, String url) {
 		return send(page, url, "DELETE", null);
 	}
 
-	InPageResponse postJson(Page page, String url, Map<String, Object> body) {
+	@Override
+	public InPageResponse postJson(Page page, String url, Map<String, Object> body) {
 		return send(page, url, "POST", body);
 	}
 
