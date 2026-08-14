@@ -217,7 +217,7 @@ class CartServiceTest {
 
 			when(reservationPort.findById(1L)).thenReturn(Optional.of(reservation));
 			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
-			when(profilePort.findAll()).thenReturn(List.of(profile));
+			when(profilePort.findById(profile.id())).thenReturn(Optional.of(profile));
 
 			// When
 			cartService.handleBuy(1L, "pat");
@@ -255,7 +255,7 @@ class CartServiceTest {
 
 			when(reservationPort.findById(1L)).thenReturn(Optional.of(reservation));
 			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
-			when(profilePort.findAll()).thenReturn(List.of(profile));
+			when(profilePort.findById(profile.id())).thenReturn(Optional.of(profile));
 
 			// When
 			cartService.handleSkip(1L, "pat");

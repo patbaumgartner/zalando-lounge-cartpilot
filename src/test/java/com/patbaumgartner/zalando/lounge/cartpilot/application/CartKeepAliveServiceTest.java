@@ -104,7 +104,7 @@ class CartKeepAliveServiceTest {
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(profilePort.findById(profile.id())).thenReturn(Optional.of(profile));
 		when(browser.refreshCartItem(eq(product.productUrl()), any()))
 			.thenReturn(new CartRefreshResult(true, CartAddResult.sizeUnavailable("size 52 not purchasable")));
 
@@ -127,7 +127,7 @@ class CartKeepAliveServiceTest {
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(profilePort.findById(profile.id())).thenReturn(Optional.of(profile));
 		when(browser.refreshCartItem(eq(product.productUrl()), any())).thenReturn(
 				new CartRefreshResult(false, CartAddResult.blocked(403, "bot protection refused the basket call")));
 
@@ -147,7 +147,7 @@ class CartKeepAliveServiceTest {
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(profilePort.findById(profile.id())).thenReturn(Optional.of(profile));
 		when(browser.refreshCartItem(eq(product.productUrl()), any())).thenReturn(
 				new CartRefreshResult(true, CartAddResult.blocked(403, "bot protection refused the basket call")));
 

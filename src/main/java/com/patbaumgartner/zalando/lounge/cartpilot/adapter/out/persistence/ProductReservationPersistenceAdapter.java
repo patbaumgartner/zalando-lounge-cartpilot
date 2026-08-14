@@ -4,13 +4,20 @@ import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Decision;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductReservation;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.ProductReservationPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Component
 class ProductReservationPersistenceAdapter implements ProductReservationPort {
+
+	private static final Logger log = LoggerFactory.getLogger(ProductReservationPersistenceAdapter.class);
 
 	private final ProductReservationSpringRepository repository;
 
@@ -36,6 +43,32 @@ class ProductReservationPersistenceAdapter implements ProductReservationPort {
 	@Override
 	public List<ProductReservation> findByProfileId(Long profileId) {
 		return repository.findByProfileId(profileId).stream().map(this::toDomain).toList();
+	}
+
+	@Override
+	public List<ProductReservation> findByStatusCreatedOn(ReservationStatus status, LocalDate date) {
+		return repository
+			.findByStatusAndCreatedAtBetween(status.name(), date.atStartOfDay(), date.plusDays(1).atStartOfDay())
+			.stream()
+			.map(this::toDomain)
+			.toList();
+	}
+
+	@Override
+	public Map<ReservationStatus, Long> countByStatus() {
+		var counts = new EnumMap<ReservationStatus, Long>(ReservationStatus.class);
+		for (var status : ReservationStatus.values()) {
+			counts.put(status, 0L);
+		}
+		for (var row : repository.countGroupedByStatus()) {
+			try {
+				counts.put(ReservationStatus.valueOf(row.status()), row.total());
+			}
+			catch (IllegalArgumentException unknownStatus) {
+				log.warn("Ignoring unknown reservation status in database: {}", row.status());
+			}
+		}
+		return counts;
 	}
 
 	@Override

@@ -36,6 +36,11 @@ class ProfilePersistenceAdapter implements ProfilePort {
 	}
 
 	@Override
+	public Optional<Profile> findById(Long id) {
+		return id == null ? Optional.empty() : repository.findById(id).map(this::toDomain);
+	}
+
+	@Override
 	public Optional<Profile> findByName(String name) {
 		return repository.findByName(name).map(this::toDomain);
 	}
@@ -43,8 +48,16 @@ class ProfilePersistenceAdapter implements ProfilePort {
 	@Override
 	public Profile save(Profile profile) {
 		var entity = toEntity(profile);
+		// Every save rebuilt the entity from the domain object, which carries no
+		// created_at, so an unconditional now() silently reset the creation date on
+		// every profile edit.
+		entity.createdAt = existingCreatedAt(profile.id()).orElseGet(LocalDateTime::now);
 		var saved = repository.save(entity);
 		return toDomain(saved);
+	}
+
+	private Optional<LocalDateTime> existingCreatedAt(Long id) {
+		return id == null ? Optional.empty() : repository.findById(id).map(existing -> existing.createdAt);
 	}
 
 	// ── Mapping ────────────────────────────────────────────────
@@ -71,7 +84,6 @@ class ProfilePersistenceAdapter implements ProfilePort {
 		entity.brandTier1 = String.join(",", p.brandTier1());
 		entity.brandTier2 = String.join(",", p.brandTier2());
 		entity.brandAliases = formatBrandAliases(p.brandAliases());
-		entity.createdAt = LocalDateTime.now();
 
 		var sizeEntities = new LinkedHashSet<ProfileSizeJdbcEntity>();
 		p.sizes().forEach((cat, sz) -> {

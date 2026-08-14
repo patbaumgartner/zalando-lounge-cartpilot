@@ -304,8 +304,9 @@ class TelegramBotHandlerTest {
 				.build();
 
 			when(profileService.listAll()).thenReturn(List.of(profile));
-			when(reservationPort.findByStatus(any())).thenReturn(List.of());
-			when(reservationPort.findByStatus(ReservationStatus.BLOCKED)).thenReturn(List.of(blocked));
+			when(reservationPort.findByStatusCreatedOn(any(), any())).thenReturn(List.of());
+			when(reservationPort.findByStatusCreatedOn(eq(ReservationStatus.BLOCKED), any()))
+				.thenReturn(List.of(blocked));
 			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
 
 			handler.onUpdateReceived(groupTextUpdate("/links"));
@@ -319,7 +320,7 @@ class TelegramBotHandlerTest {
 		@DisplayName("/links reports an empty state when nothing is open")
 		void linksCommandReportsEmptyState() {
 			when(profileService.listAll()).thenReturn(List.of());
-			when(reservationPort.findByStatus(any())).thenReturn(List.of());
+			when(reservationPort.findByStatusCreatedOn(any(), any())).thenReturn(List.of());
 
 			handler.onUpdateReceived(groupTextUpdate("/links"));
 

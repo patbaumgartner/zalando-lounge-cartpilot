@@ -137,10 +137,7 @@ public class CartService {
 		var product = productPort.findById(reservation.productId())
 			.orElseThrow(() -> new IllegalStateException("Product not found"));
 
-		var profile = profilePort.findAll()
-			.stream()
-			.filter(p -> p.id().equals(reservation.profileId()))
-			.findFirst()
+		var profile = profilePort.findById(reservation.profileId())
 			.orElseThrow(() -> new IllegalStateException("Profile not found"));
 
 		reservation.markPurchaseInitiated();
