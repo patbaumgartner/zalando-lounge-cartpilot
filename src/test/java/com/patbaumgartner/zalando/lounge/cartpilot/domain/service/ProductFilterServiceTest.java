@@ -179,7 +179,30 @@ class ProductFilterServiceTest {
 
 			var product = ProductTestData.aProduct().withId(99L).withSizesAvailable(List.of("52")).build();
 
-			assertThat(filterService.filter(List.of(product), profile, Set.of(99L))).isEmpty();
+			assertThat(filterService.filter(List.of(product), profile, Set.of(product.articleKey()))).isEmpty();
+		}
+
+		@Test
+		@DisplayName("still skips a purchased article when a later scan gave it a new database id")
+		void alreadyPurchasedAcrossScans() {
+			var profile = ProfileTestData.aProfile()
+				.withGender(Gender.MEN)
+				.withSize(Category.JACKETS, "52")
+				.withTier1Brand("Mammut")
+				.build();
+
+			String url = "https://www.zalando-lounge.ch/campaigns/camp-9/articles/MA345F0AB-K11";
+			var boughtYesterday = ProductTestData.aProduct().withId(99L).withProductUrl(url).build();
+			var seenAgainToday = ProductTestData.aProduct()
+				.withId(4711L)
+				.withProductUrl(url)
+				.withSizesAvailable(List.of("52"))
+				.build();
+
+			var purchased = Set.of(boughtYesterday.articleKey());
+
+			assertThat(filterService.filter(List.of(seenAgainToday), profile, purchased)).isEmpty();
+			assertThat(filterService.prefilterCandidates(List.of(seenAgainToday), profile, purchased)).isEmpty();
 		}
 
 		@Test
@@ -313,7 +336,8 @@ class ProductFilterServiceTest {
 				.withSizesAvailable(List.of())
 				.build();
 
-			assertThat(filterService.prefilterCandidates(List.of(product), profile, Set.of(42L))).isEmpty();
+			assertThat(filterService.prefilterCandidates(List.of(product), profile, Set.of(product.articleKey())))
+				.isEmpty();
 		}
 
 	}

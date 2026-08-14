@@ -168,7 +168,7 @@ class CampaignScannerServiceTest {
 			when(browser.scrapeProducts(campaign)).thenReturn(List.of(product));
 			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(product));
 			when(profilePort.findAllActive()).thenReturn(List.of(profile));
-			when(purchasedItemPort.findProductIdsByProfileId(1L)).thenReturn(Set.of());
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of());
 
 			service.scan();
@@ -189,7 +189,7 @@ class CampaignScannerServiceTest {
 			when(browser.scrapeProducts(campaign)).thenReturn(List.of(product));
 			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(product));
 			when(profilePort.findAllActive()).thenReturn(List.of(profile));
-			when(purchasedItemPort.findProductIdsByProfileId(1L)).thenReturn(Set.of());
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of(autoReserveResult));
 			when(cartService.addToCart(autoReserveResult)).thenReturn(CartAddResult.added());
 
@@ -211,7 +211,7 @@ class CampaignScannerServiceTest {
 			when(browser.scrapeProducts(campaign)).thenReturn(List.of(product));
 			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(product));
 			when(profilePort.findAllActive()).thenReturn(List.of(profile));
-			when(purchasedItemPort.findProductIdsByProfileId(1L)).thenReturn(Set.of());
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of(autoReserveResult));
 			when(cartService.addToCart(autoReserveResult))
 				.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
@@ -240,7 +240,7 @@ class CampaignScannerServiceTest {
 			when(browser.scrapeProducts(campaign)).thenReturn(List.of(product));
 			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(product));
 			when(profilePort.findAllActive()).thenReturn(List.of(profile));
-			when(purchasedItemPort.findProductIdsByProfileId(1L)).thenReturn(Set.of());
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of(notifyResult));
 
 			service.scan();
@@ -263,7 +263,7 @@ class CampaignScannerServiceTest {
 			when(browser.scrapeProducts(campaign)).thenReturn(List.of(product));
 			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(product));
 			when(profilePort.findAllActive()).thenReturn(List.of(profile));
-			when(purchasedItemPort.findProductIdsByProfileId(1L)).thenReturn(Set.of());
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of());
 
 			service.scan();

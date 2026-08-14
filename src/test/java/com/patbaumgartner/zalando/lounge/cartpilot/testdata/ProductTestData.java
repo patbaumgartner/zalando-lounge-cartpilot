@@ -35,7 +35,7 @@ public class ProductTestData {
 
 	private int discountPct = 39;
 
-	private final String productUrl = "https://www.zalando-lounge.ch/product/mammut-convey-tour";
+	private String productUrl = "https://www.zalando-lounge.ch/campaigns/camp-1/articles/MA345F0AB-K11";
 
 	private ProductStatus status = ProductStatus.DISCOVERED;
 
@@ -46,6 +46,11 @@ public class ProductTestData {
 
 	public static ProductTestData aProduct() {
 		return new ProductTestData();
+	}
+
+	public ProductTestData withProductUrl(String productUrl) {
+		this.productUrl = productUrl;
+		return this;
 	}
 
 	public static DiscoveredProduct mammutJacket() {

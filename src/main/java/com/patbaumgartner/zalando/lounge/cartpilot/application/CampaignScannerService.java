@@ -148,10 +148,10 @@ public class CampaignScannerService {
 			// Phase 1: cheap pre-filter (gender + price + brand tier) to find which
 			// products are worth a detail-page size lookup. Campaign listings do not
 			// expose sizes, so we defer the size gate.
-			var purchasedByProfile = new java.util.HashMap<Long, Set<Long>>();
+			var purchasedByProfile = new java.util.HashMap<Long, Set<String>>();
 			var candidates = new java.util.LinkedHashSet<DiscoveredProduct>();
 			for (var profile : profiles) {
-				var purchased = purchasedItemPort.findProductIdsByProfileId(profile.id());
+				var purchased = purchasedItemPort.findPurchasedArticleKeysByProfileId(profile.id());
 				purchasedByProfile.put(profile.id(), purchased);
 				candidates.addAll(filterService.prefilterCandidates(persisted, profile, purchased));
 			}
@@ -252,7 +252,7 @@ public class CampaignScannerService {
 	}
 
 	private DispatchOutcome dispatchMatches(List<Profile> profiles, List<DiscoveredProduct> persisted,
-			Map<Long, Set<Long>> purchasedByProfile) {
+			Map<Long, Set<String>> purchasedByProfile) {
 		var reserved = new ArrayList<NotificationPort.ProductLink>();
 		var blocked = new ArrayList<NotificationPort.ProductLink>();
 		var unavailable = new ArrayList<NotificationPort.ProductLink>();

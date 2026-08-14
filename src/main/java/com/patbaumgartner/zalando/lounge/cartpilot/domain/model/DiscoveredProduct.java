@@ -4,12 +4,15 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * A product found during a campaign scan. Status transitions: DISCOVERED → SCORED →
  * PROCESSED
  */
 public class DiscoveredProduct {
+
+	private static final Pattern ARTICLE_KEY_PATTERN = Pattern.compile("/articles/([^/?#]+)");
 
 	private final Long id;
 
@@ -62,6 +65,27 @@ public class DiscoveredProduct {
 			return false;
 		}
 		return sizesAvailable.stream().anyMatch(s -> s.equalsIgnoreCase(size.trim()));
+	}
+
+	/**
+	 * Stable identity of the Zalando article behind this row.
+	 *
+	 * <p>
+	 * Every scan inserts its products afresh, so the database id identifies a
+	 * <em>sighting</em>, not an article: comparing ids across days never matches. The
+	 * article sku in the product URL is what stays the same when the same article shows
+	 * up again tomorrow.
+	 */
+	public String articleKey() {
+		return articleKeyOf(productUrl);
+	}
+
+	public static String articleKeyOf(String productUrl) {
+		if (productUrl == null || productUrl.isBlank()) {
+			return "";
+		}
+		var matcher = ARTICLE_KEY_PATTERN.matcher(productUrl);
+		return matcher.find() ? matcher.group(1) : productUrl;
 	}
 
 	public boolean isGenderCompatibleWith(Gender profileGender) {

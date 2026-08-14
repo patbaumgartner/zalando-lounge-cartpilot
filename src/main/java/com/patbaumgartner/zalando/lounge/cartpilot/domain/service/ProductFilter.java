@@ -35,13 +35,14 @@ public class ProductFilter {
 	 * gates and has a brand tier match.
 	 * @param products products to evaluate
 	 * @param profile the profile to match against
-	 * @param purchasedProductIds ids of products already purchased by this profile
+	 * @param purchasedArticleKeys article keys already purchased by this profile
 	 */
-	public List<FilterResult> filter(List<DiscoveredProduct> products, Profile profile, Set<Long> purchasedProductIds) {
+	public List<FilterResult> filter(List<DiscoveredProduct> products, Profile profile,
+			Set<String> purchasedArticleKeys) {
 		var results = new ArrayList<FilterResult>();
 
 		for (var product : products) {
-			evaluate(product, profile, purchasedProductIds).ifPresent(results::add);
+			evaluate(product, profile, purchasedArticleKeys).ifPresent(results::add);
 		}
 
 		return results;
@@ -54,13 +55,13 @@ public class ProductFilter {
 	 * the full {@link #filter} pass.
 	 * @param products products to evaluate
 	 * @param profile the profile to match against
-	 * @param purchasedProductIds ids of products already purchased by this profile
+	 * @param purchasedArticleKeys article keys already purchased by this profile
 	 */
 	public List<DiscoveredProduct> prefilterCandidates(List<DiscoveredProduct> products, Profile profile,
-			Set<Long> purchasedProductIds) {
+			Set<String> purchasedArticleKeys) {
 		var candidates = new ArrayList<DiscoveredProduct>();
 		for (var product : products) {
-			if (passesPreSizeGates(product, profile, purchasedProductIds)) {
+			if (passesPreSizeGates(product, profile, purchasedArticleKeys)) {
 				candidates.add(product);
 			}
 		}
@@ -69,7 +70,7 @@ public class ProductFilter {
 
 	// ── Private ────────────────────────────────────────────────
 
-	private boolean passesPreSizeGates(DiscoveredProduct product, Profile profile, Set<Long> purchasedProductIds) {
+	private boolean passesPreSizeGates(DiscoveredProduct product, Profile profile, Set<String> purchasedArticleKeys) {
 		if (!product.isGenderCompatibleWith(profile.gender())) {
 			return false;
 		}
@@ -80,13 +81,14 @@ public class ProductFilter {
 		if (!product.isPriceUnder(maxPrice.orElse(null))) {
 			return false;
 		}
-		if (product.id() != null && purchasedProductIds.contains(product.id())) {
+		if (purchasedArticleKeys.contains(product.articleKey())) {
 			return false;
 		}
 		return brandMatcher.findTier(product.brand(), profile).isPresent();
 	}
 
-	private Optional<FilterResult> evaluate(DiscoveredProduct product, Profile profile, Set<Long> purchasedProductIds) {
+	private Optional<FilterResult> evaluate(DiscoveredProduct product, Profile profile,
+			Set<String> purchasedArticleKeys) {
 		// Gate 1: gender
 		if (!product.isGenderCompatibleWith(profile.gender())) {
 			return Optional.empty();
@@ -108,7 +110,7 @@ public class ProductFilter {
 		}
 
 		// Gate 4: not already purchased
-		if (product.id() != null && purchasedProductIds.contains(product.id())) {
+		if (purchasedArticleKeys.contains(product.articleKey())) {
 			return Optional.empty();
 		}
 
