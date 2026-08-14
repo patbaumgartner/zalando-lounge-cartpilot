@@ -113,26 +113,9 @@ public class CampaignScannerService {
 			}
 
 			if (!ensureAuthenticatedWithRetry()) {
-				notification.sendGroupMessage("🚨 Login failed — session could not be established after 2 attempts");
+				notification.sendGroupMessage("🚨 Login failed — session could not be established after %d attempt(s)"
+					.formatted(loginAttempts()));
 				return;
-			}
-
-			// Start every scan from a clean slate so leftover items from a previous run
-			// never linger in the cart.
-			try {
-				var cleared = cartService.clearCart("auto-scan");
-				if (cleared.browserRemovedCount() > 0 || cleared.reservationsUpdatedCount() > 0) {
-					log.atInfo()
-						.addArgument(cleared.browserRemovedCount())
-						.addArgument(cleared.reservationsUpdatedCount())
-						.log("Cleared cart before scan ({} item(s) removed, {} reservation(s) released)");
-					notification.sendGroupMessage(
-							"🧹 Cleared cart before scan — %d item(s)".formatted(cleared.browserRemovedCount()));
-				}
-			}
-			catch (Exception e) {
-				log.warn("Pre-scan cart clear failed: {}", e.getMessage());
-				notes.add("Pre-scan cart clear failed: " + e.getMessage());
 			}
 
 			var campaigns = fetchWithRetry();
@@ -178,7 +161,11 @@ public class CampaignScannerService {
 				.sendGroupMessage("📦 %d product(s) · %d candidate(s)".formatted(persisted.size(), candidates.size()));
 			int detailFetches = enrichCandidateSizes(candidates, notes);
 
-			// Phase 3: full filter (size gate now satisfiable) and dispatch.
+			// Phase 3: free the basket for today's matches, then filter and dispatch.
+			// Clearing only once there is something to put back means a failed login,
+			// a dead browser or an empty campaign list can no longer throw away
+			// yesterday's still-valid holds for nothing.
+			clearCartBeforeDispatch(notes);
 			var outcome = dispatchMatches(profiles, persisted, purchasedByProfile);
 
 			persisted.forEach(p -> p.markProcessed());
@@ -196,6 +183,38 @@ public class CampaignScannerService {
 	}
 
 	// ── Private helpers ────────────────────────────────────────
+
+	private int loginAttempts() {
+		return Math.max(1, properties.zalando().loginMaxAttempts());
+	}
+
+	/**
+	 * Empties the basket immediately before today's matches are added, so a scan starts
+	 * from a clean slate without discarding existing holds when it turns out there is
+	 * nothing to scan. An unreadable basket releases nothing and is reported as a note.
+	 */
+	private void clearCartBeforeDispatch(List<String> notes) {
+		try {
+			var cleared = cartService.clearCart("auto-scan");
+			if (!cleared.cartReadable()) {
+				log.warn("Pre-dispatch cart clear could not read the basket");
+				notes.add("Cart could not be read before dispatch — previous holds were left untouched");
+				return;
+			}
+			if (cleared.browserRemovedCount() > 0 || cleared.reservationsUpdatedCount() > 0) {
+				log.atInfo()
+					.addArgument(cleared.browserRemovedCount())
+					.addArgument(cleared.reservationsUpdatedCount())
+					.log("Cleared cart before dispatch ({} item(s) removed, {} reservation(s) released)");
+				notification.sendGroupMessage(
+						"🧹 Cleared cart before dispatch — %d item(s)".formatted(cleared.browserRemovedCount()));
+			}
+		}
+		catch (Exception e) {
+			log.warn("Pre-dispatch cart clear failed: {}", e.getMessage());
+			notes.add("Pre-dispatch cart clear failed: " + e.getMessage());
+		}
+	}
 
 	private int enrichCandidateSizes(Collection<DiscoveredProduct> candidates, List<String> notes) {
 		if (candidates.isEmpty()) {
@@ -318,57 +337,55 @@ public class CampaignScannerService {
 	}
 
 	private boolean ensureAuthenticatedWithRetry() {
-		try {
-			browser.ensureAuthenticated();
-			return true;
-		}
-		catch (Exception firstAttemptFailure) {
-			log.warn("Authentication attempt 1/2 failed: {}", firstAttemptFailure.getMessage());
-		}
+		int attempts = loginAttempts();
+		long baseDelayMillis = Math.max(0L, properties.zalando().authRetryBaseDelayMs());
 
-		try {
-			Thread.sleep(2_000L);
+		for (int attempt = 1; attempt <= attempts; attempt++) {
+			try {
+				browser.ensureAuthenticated();
+				return true;
+			}
+			catch (Exception failure) {
+				log.warn("Authentication attempt {}/{} failed: {}", attempt, attempts, failure.getMessage());
+				if (attempt == attempts) {
+					log.error("Authentication failed after {} attempt(s)", attempts, failure);
+					return false;
+				}
+				if (!sleepQuietly(backoffWithJitter(baseDelayMillis, attempt))) {
+					return false;
+				}
+			}
 		}
-		catch (InterruptedException interruptedException) {
-			Thread.currentThread().interrupt();
-			return false;
-		}
-
-		try {
-			browser.ensureAuthenticated();
-			return true;
-		}
-		catch (Exception secondAttemptFailure) {
-			log.warn("Authentication attempt 2/2 failed: {}", secondAttemptFailure.getMessage());
-			log.error("Authentication failed after retry", secondAttemptFailure);
-			return false;
-		}
+		return false;
 	}
 
 	private List<Campaign> fetchWithRetry() {
-		int maxAttempts = properties.zalando().retryMaxAttempts();
+		int maxAttempts = Math.max(1, properties.zalando().retryMaxAttempts());
 		long baseIntervalMillis = properties.zalando().retryIntervalSeconds() * 1_000L;
 
 		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-			var campaigns = browser.fetchTodayCampaigns();
+			List<Campaign> campaigns;
+			try {
+				campaigns = browser.fetchTodayCampaigns();
+			}
+			catch (Exception e) {
+				// A dropped websocket or a transient bot wall used to abort the whole
+				// scan here, because only an empty result was ever retried.
+				log.warn("Campaign fetch attempt {}/{} failed: {}", attempt, maxAttempts, e.getMessage());
+				campaigns = List.of();
+			}
 			if (!campaigns.isEmpty()) {
 				return campaigns;
 			}
 
 			if (attempt < maxAttempts) {
-				long exponential = baseIntervalMillis * (1L << Math.min(4, Math.max(0, attempt - 1)));
-				long jitter = ThreadLocalRandom.current().nextLong(0, Math.max(1L, baseIntervalMillis / 2));
-				long waitMillis = Math.min(300_000L, exponential + jitter);
+				long waitMillis = backoffWithJitter(baseIntervalMillis, attempt);
 				log.atInfo()
 					.addArgument(attempt)
 					.addArgument(maxAttempts)
 					.addArgument(() -> waitMillis / 1000)
 					.log("No campaigns on attempt {}/{}; retrying in {} s...");
-				try {
-					Thread.sleep(waitMillis);
-				}
-				catch (InterruptedException ie) {
-					Thread.currentThread().interrupt();
+				if (!sleepQuietly(waitMillis)) {
 					break;
 				}
 			}
@@ -377,6 +394,33 @@ public class CampaignScannerService {
 			}
 		}
 		return List.of();
+	}
+
+	/**
+	 * Exponential backoff capped at five minutes, with jitter to avoid lockstep retries.
+	 */
+	private static long backoffWithJitter(long baseMillis, int attempt) {
+		if (baseMillis <= 0) {
+			return 0L;
+		}
+		long exponential = baseMillis * (1L << Math.min(4, Math.max(0, attempt - 1)));
+		long jitter = ThreadLocalRandom.current().nextLong(0, Math.max(1L, baseMillis / 2));
+		return Math.min(300_000L, exponential + jitter);
+	}
+
+	/** Sleeps, returning {@code false} when the thread was interrupted meanwhile. */
+	private static boolean sleepQuietly(long millis) {
+		if (millis <= 0) {
+			return true;
+		}
+		try {
+			Thread.sleep(millis);
+			return true;
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return false;
+		}
 	}
 
 	private List<DiscoveredProduct> scrapeAllProducts(List<Campaign> campaigns, List<String> notes) {

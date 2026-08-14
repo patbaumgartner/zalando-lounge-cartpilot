@@ -115,6 +115,45 @@ class CampaignScannerServiceTest {
 	}
 
 	@Nested
+	@DisplayName("Cart clearing is deferred until there is something to dispatch")
+	class DeferredCartClear {
+
+		@Test
+		@DisplayName("does not clear the cart when authentication fails")
+		void keepsCartWhenAuthenticationFails() {
+			doThrow(new BrowserPort.BrowserException("Login failed", new RuntimeException("auth error"))).when(browser)
+				.ensureAuthenticated();
+
+			service.scan();
+
+			verify(cartService, never()).clearCart(anyString());
+		}
+
+		@Test
+		@DisplayName("does not clear the cart when no campaigns are open")
+		void keepsCartWhenNoCampaigns() {
+			when(browser.fetchTodayCampaigns()).thenReturn(List.of());
+
+			service.scan();
+
+			verify(cartService, never()).clearCart(anyString());
+		}
+
+		@Test
+		@DisplayName("does not clear the cart when every campaign scrape comes back empty")
+		void keepsCartWhenNoProducts() {
+			var campaign = new Campaign("camp-001", "Winter Sale", LocalDate.now(), "https://example.com/c1");
+			when(browser.fetchTodayCampaigns()).thenReturn(List.of(campaign));
+			when(browser.scrapeProducts(campaign)).thenReturn(List.of());
+
+			service.scan();
+
+			verify(cartService, never()).clearCart(anyString());
+		}
+
+	}
+
+	@Nested
 	@DisplayName("Successful scan")
 	class SuccessfulScan {
 
@@ -253,6 +292,34 @@ class CampaignScannerServiceTest {
 
 			verify(browser, times(3)).fetchTodayCampaigns();
 			verify(notification).sendGroupMessage(contains("No new campaigns"));
+		}
+
+		@Test
+		@DisplayName("retries when the campaign fetch throws instead of aborting the scan")
+		void retriesWhenCampaignFetchThrows() {
+			var campaign = new Campaign("camp-001", "Winter Sale", LocalDate.now(), "https://example.com/c1");
+			when(zalandoProps.retryMaxAttempts()).thenReturn(3);
+			when(browser.fetchTodayCampaigns()).thenThrow(new BrowserPort.BrowserException("websocket dropped", null))
+				.thenReturn(List.of(campaign));
+			when(browser.scrapeProducts(campaign)).thenReturn(List.of());
+
+			service.scan();
+
+			verify(browser, times(2)).fetchTodayCampaigns();
+			verify(notification, never()).sendGroupMessage(contains("Scan failed"));
+		}
+
+		@Test
+		@DisplayName("retries authentication up to the configured login-max-attempts")
+		void retriesAuthenticationUpToConfiguredAttempts() {
+			when(zalandoProps.loginMaxAttempts()).thenReturn(3);
+			when(zalandoProps.authRetryBaseDelayMs()).thenReturn(0L);
+			doThrow(new BrowserPort.BrowserException("Login failed", null)).when(browser).ensureAuthenticated();
+
+			service.scan();
+
+			verify(browser, times(3)).ensureAuthenticated();
+			verify(notification).sendGroupMessage(contains("3 attempt(s)"));
 		}
 
 	}
