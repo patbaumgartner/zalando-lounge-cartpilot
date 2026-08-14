@@ -29,10 +29,16 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info
   endpoint:
     health:
-      show-details: always
+      # There is no authentication in front of the actuator, and docker-compose
+      # publishes the port, so health details (datasource URL, disk paths) would be
+      # readable by anything that can reach it.
+      show-details: never
+  info:
+    git:
+      mode: simple
 
 cartpilot:
   zalando:

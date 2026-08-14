@@ -46,8 +46,9 @@ jobs:
 
       - name: Build, test & verify
         # Integration tests use Testcontainers, which relies on the Docker daemon
-        # available on the GitHub-hosted runner.
-        run: ./mvnw clean verify -ntp -Dmaven.test.failure.ignore=true
+        # available on the GitHub-hosted runner. Test failures fail this step
+        # directly rather than relying on the reporting action below to notice.
+        run: ./mvnw clean verify -ntp
         env:
           MAVEN_OPTS: ${{ env.MAVEN_OPTS }}
 
