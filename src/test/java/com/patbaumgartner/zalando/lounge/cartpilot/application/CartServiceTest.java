@@ -239,6 +239,22 @@ class CartServiceTest {
 				.hasMessageContaining("99");
 		}
 
+		@Test
+		@DisplayName("does not book a second purchase when Buy is tapped again")
+		void ignoresRepeatedBuy() {
+			var reservation = ReservationTestData.inCartReservation();
+			reservation.markPurchaseInitiated();
+			var product = ProductTestData.mammutJacket();
+
+			when(reservationPort.findById(1L)).thenReturn(Optional.of(reservation));
+			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
+
+			cartService.handleBuy(1L, "pat");
+
+			verifyNoInteractions(purchasedItemPort);
+			verify(reservationPort, never()).update(any(ProductReservation.class));
+		}
+
 	}
 
 	@Nested
@@ -265,6 +281,23 @@ class CartServiceTest {
 			verify(browser).removeFromCart(product.productUrl());
 			verify(reservationPort).update(reservation);
 			verify(notification).updateGroupMessage(anyInt(), anyString());
+		}
+
+		@Test
+		@DisplayName("ignores Skip once the item has been bought")
+		void ignoresSkipAfterPurchase() {
+			var reservation = ReservationTestData.inCartReservation();
+			reservation.markPurchaseInitiated();
+			var product = ProductTestData.mammutJacket();
+
+			when(reservationPort.findById(1L)).thenReturn(Optional.of(reservation));
+			when(productPort.findById(product.id())).thenReturn(Optional.of(product));
+
+			cartService.handleSkip(1L, "pat");
+
+			assertThat(reservation.status()).isEqualTo(ReservationStatus.PURCHASE_INITIATED);
+			verify(browser, never()).removeFromCart(anyString());
+			verify(reservationPort, never()).update(any(ProductReservation.class));
 		}
 
 	}

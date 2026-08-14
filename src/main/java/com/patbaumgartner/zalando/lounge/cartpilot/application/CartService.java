@@ -137,6 +137,14 @@ public class CartService {
 		var product = productPort.findById(reservation.productId())
 			.orElseThrow(() -> new IllegalStateException("Product not found"));
 
+		// The inline keyboard stays on the message for as long as it exists, so a second
+		// tap arrives long after the first. Without this it books the purchase twice.
+		if (reservation.isPurchaseInitiated()) {
+			log.info("Ignoring repeated Buy for reservation {} from @{}", reservationId, actorUsername);
+			notification.sendGroupMessage("🛒 Already bought — checkout: " + product.productUrl());
+			return;
+		}
+
 		var profile = profilePort.findById(reservation.profileId())
 			.orElseThrow(() -> new IllegalStateException("Profile not found"));
 
@@ -150,7 +158,6 @@ public class CartService {
 			notification.updateGroupMessage(reservation.telegramMsgId(), msg);
 		}
 
-		// Deep-link: send checkout URL to the group
 		notification.sendGroupMessage("🛒 Checkout: " + product.productUrl());
 		log.atInfo().addArgument(actorUsername).addArgument(() -> product.name()).log("Buy confirmed by @{} for {}");
 	}
@@ -169,6 +176,11 @@ public class CartService {
 
 		var product = productPort.findById(reservation.productId())
 			.orElseThrow(() -> new IllegalStateException("Product not found"));
+
+		if (reservation.isPurchaseInitiated()) {
+			log.info("Ignoring Skip for already-bought reservation {} from @{}", reservationId, actorUsername);
+			return;
+		}
 
 		boolean stillInBasket = false;
 		if (reservation.isInCart()) {
