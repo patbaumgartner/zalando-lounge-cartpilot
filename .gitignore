@@ -9,6 +9,9 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+# override global "out/" rule for hexagonal adapter.out packages
+!**/src/main/**/out/
+!**/src/test/**/out/
 
 ### STS ###
 .apt_generated
