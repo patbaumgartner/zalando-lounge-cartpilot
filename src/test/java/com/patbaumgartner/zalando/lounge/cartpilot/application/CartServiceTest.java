@@ -4,6 +4,7 @@ import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.BrandTier;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddOutcome;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartClearResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Decision;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.FilterResult;
@@ -125,6 +126,26 @@ class CartServiceTest {
 			assertThat(captor.getValue().status()).isEqualTo(ReservationStatus.OUT_OF_STOCK);
 
 			verifyNoInteractions(notification);
+		}
+
+		@Test
+		@DisplayName("saves FAILED, not OUT_OF_STOCK, when the basket call fails for an unrelated reason")
+		void savesFailedWhenBasketCallFails() {
+			var product = ProductTestData.mammutJacket();
+			var profile = ProfileTestData.pat();
+			var result = autoReserveResult(product, profile, "52", 70);
+
+			when(browser.addToCart(anyString(), anyString()))
+				.thenReturn(CartAddResult.failed(500, "basket call answered HTTP 500"));
+			when(reservationPort.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+			var outcome = cartService.addToCart(result);
+
+			assertThat(outcome.outcome()).isEqualTo(CartAddOutcome.FAILED);
+
+			var captor = ArgumentCaptor.forClass(ProductReservation.class);
+			verify(reservationPort).save(captor.capture());
+			assertThat(captor.getValue().status()).isEqualTo(ReservationStatus.FAILED);
 		}
 
 		@Test
@@ -259,7 +280,7 @@ class CartServiceTest {
 			var reservation2 = ReservationTestData.inCartReservation();
 			reservation2.setTelegramMsgId(null);
 
-			when(browser.clearCart()).thenReturn(2);
+			when(browser.clearCart()).thenReturn(CartClearResult.of(2, 0));
 			when(reservationPort.findByStatus(ReservationStatus.IN_CART))
 				.thenReturn(List.of(reservation1, reservation2));
 
@@ -272,6 +293,23 @@ class CartServiceTest {
 			verify(browser).clearCart();
 			verify(reservationPort, times(2)).update(any(ProductReservation.class));
 			verify(notification).updateGroupMessage(eq(reservation1.telegramMsgId()), contains("cleared"));
+		}
+
+		@Test
+		@DisplayName("leaves reservations untouched when the basket could not be read")
+		void doesNotReleaseReservationsWhenCartUnreadable() {
+			var reservation = ReservationTestData.inCartReservation();
+
+			when(browser.clearCart()).thenReturn(CartClearResult.unreadable());
+			when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+
+			var result = cartService.clearCart("pat");
+
+			assertThat(result.cartReadable()).isFalse();
+			assertThat(result.reservationsUpdatedCount()).isZero();
+			assertThat(reservation.status()).isEqualTo(ReservationStatus.IN_CART);
+			verify(reservationPort, never()).update(any(ProductReservation.class));
+			verifyNoInteractions(notification);
 		}
 
 	}

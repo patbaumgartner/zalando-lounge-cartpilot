@@ -264,8 +264,8 @@ public class CampaignScannerService {
 						.add(NotificationPort.ProductLink.of(result, ReservationStatus.BLOCKED, addResult.describe()));
 					case SIZE_UNAVAILABLE -> unavailable.add(NotificationPort.ProductLink.of(result,
 							ReservationStatus.OUT_OF_STOCK, addResult.detail()));
-					case FAILED -> failed.add(NotificationPort.ProductLink.of(result, ReservationStatus.OUT_OF_STOCK,
-							addResult.describe()));
+					case FAILED -> failed
+						.add(NotificationPort.ProductLink.of(result, ReservationStatus.FAILED, addResult.describe()));
 				}
 			}
 		}

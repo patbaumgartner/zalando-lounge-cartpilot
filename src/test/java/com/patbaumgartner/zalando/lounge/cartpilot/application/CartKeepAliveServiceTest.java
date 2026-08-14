@@ -2,6 +2,7 @@ package com.patbaumgartner.zalando.lounge.cartpilot.application;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartRefreshResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ReservationStatus;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.DiscoveredProductPort;
@@ -54,11 +55,14 @@ class CartKeepAliveServiceTest {
 
 	private CartKeepAliveService keepAliveService;
 
+	private BrowserGate browserGate;
+
 	@BeforeEach
 	void setUp() {
 		var props = buildProperties(2, 20);
+		browserGate = new BrowserGate();
 		keepAliveService = new CartKeepAliveService(reservationPort, productPort, profilePort, browser, notification,
-				props, new BrowserGate());
+				props, browserGate);
 	}
 
 	@Test
@@ -79,7 +83,8 @@ class CartKeepAliveServiceTest {
 
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
-		when(browser.refreshCartItem(product.productUrl(), reservation.size())).thenReturn(CartAddResult.added());
+		when(browser.refreshCartItem(product.productUrl(), reservation.size()))
+			.thenReturn(new CartRefreshResult(true, CartAddResult.added()));
 
 		keepAliveService.keepAlive();
 
@@ -101,7 +106,7 @@ class CartKeepAliveServiceTest {
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
 		when(profilePort.findAll()).thenReturn(List.of(profile));
 		when(browser.refreshCartItem(eq(product.productUrl()), any()))
-			.thenReturn(CartAddResult.sizeUnavailable("size 52 not purchasable"));
+			.thenReturn(new CartRefreshResult(true, CartAddResult.sizeUnavailable("size 52 not purchasable")));
 
 		keepAliveService.keepAlive();
 
@@ -123,14 +128,60 @@ class CartKeepAliveServiceTest {
 		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
 		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
 		when(profilePort.findAll()).thenReturn(List.of(profile));
-		when(browser.refreshCartItem(eq(product.productUrl()), any()))
-			.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+		when(browser.refreshCartItem(eq(product.productUrl()), any())).thenReturn(
+				new CartRefreshResult(false, CartAddResult.blocked(403, "bot protection refused the basket call")));
 
 		keepAliveService.keepAlive();
 
 		assertThat(reservation.status()).isEqualTo(ReservationStatus.IN_CART);
 		verify(reservationPort, never()).update(reservation);
 		verify(notification).sendProductLinks(contains("blocked"), anyList());
+	}
+
+	@Test
+	@DisplayName("expires the reservation when the item left the basket and a blocked re-add could not put it back")
+	void expiresWhenRemovalSucceededButReAddWasBlocked() {
+		var reservation = ReservationTestData.inCartReservation();
+		var product = ProductTestData.mammutJacket();
+		var profile = ProfileTestData.aProfile().withId(reservation.profileId()).build();
+
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+		when(productPort.findById(reservation.productId())).thenReturn(Optional.of(product));
+		when(profilePort.findAll()).thenReturn(List.of(profile));
+		when(browser.refreshCartItem(eq(product.productUrl()), any())).thenReturn(
+				new CartRefreshResult(true, CartAddResult.blocked(403, "bot protection refused the basket call")));
+
+		keepAliveService.keepAlive();
+
+		assertThat(reservation.status()).isEqualTo(ReservationStatus.EXPIRED);
+		verify(reservationPort).update(reservation);
+		verify(notification).sendProductLinks(contains("ran out"), anyList());
+	}
+
+	@Test
+	@DisplayName("skips entirely while another workflow is using the browser")
+	void skipsWhileBrowserIsBusy() throws Exception {
+		var reservation = ReservationTestData.inCartReservation();
+		when(reservationPort.findByStatus(ReservationStatus.IN_CART)).thenReturn(List.of(reservation));
+
+		var holding = new java.util.concurrent.CountDownLatch(1);
+		var release = new java.util.concurrent.CountDownLatch(1);
+		Thread.ofVirtual().start(() -> browserGate.runExclusively("scan", () -> {
+			holding.countDown();
+			try {
+				release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		}));
+		assertThat(holding.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+		keepAliveService.keepAlive();
+
+		release.countDown();
+		verifyNoInteractions(browser);
+		verify(reservationPort, never()).update(any());
 	}
 
 	// ── Helpers ────────────────────────────────────────────────

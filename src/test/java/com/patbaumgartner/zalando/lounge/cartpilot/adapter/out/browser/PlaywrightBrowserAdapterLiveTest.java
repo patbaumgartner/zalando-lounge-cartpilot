@@ -85,13 +85,14 @@ class PlaywrightBrowserAdapterLiveTest {
 			var refreshed = adapter.refreshCartItem(productUrl, size);
 			Duration sinceAdd = Duration.between(addedAt, Instant.now());
 			log("refreshCartItem -> " + refreshed.describe() + " (" + sinceAdd.toSeconds() + "s after add)");
-			assertThat(refreshed.isAdded()).as("item re-added during keep-alive refresh").isTrue();
+			assertThat(refreshed.isRefreshed()).as("item re-added during keep-alive refresh").isTrue();
 			assertThat(adapter.isItemInCart(productUrl)).as("item still present after refresh").isTrue();
 
 			// 3) Clear the cart via the stockcart API.
-			int removed = adapter.clearCart();
-			log("clearCart removed " + removed + " item(s)");
-			assertThat(removed).as("clearCart removed at least one item").isGreaterThanOrEqualTo(1);
+			var cleared = adapter.clearCart();
+			log("clearCart -> " + cleared.describe());
+			assertThat(cleared.cartReadable()).as("basket readable during clear").isTrue();
+			assertThat(cleared.removedCount()).as("clearCart removed at least one item").isGreaterThanOrEqualTo(1);
 			assertThat(adapter.isItemInCart(productUrl)).as("cart empty after clear").isFalse();
 
 			log("LIVE RESULT: keep-alive refresh OK, cart clearing OK.");

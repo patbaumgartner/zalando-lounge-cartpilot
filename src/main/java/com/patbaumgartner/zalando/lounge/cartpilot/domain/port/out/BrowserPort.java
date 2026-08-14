@@ -2,6 +2,8 @@ package com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out;
 
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartClearResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartRefreshResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductDetails;
 
@@ -35,13 +37,18 @@ public interface BrowserPort {
 	 */
 	CartAddResult addToCart(String productUrl, String size);
 
-	/** Removes an item identified by its product URL from the cart. */
-	void removeFromCart(String productUrl);
+	/**
+	 * Removes an item identified by its product URL from the cart.
+	 * @return {@code true} when the article is confirmed to be out of the basket,
+	 * {@code false} when the basket could not be read or the shop refused the removal
+	 */
+	boolean removeFromCart(String productUrl);
 
 	/**
-	 * Removes all items currently visible in the cart and returns removed count.
+	 * Removes every item currently in the basket, reporting whether the basket could be
+	 * read at all so an unreadable basket is never mistaken for an empty one.
 	 */
-	int clearCart();
+	CartClearResult clearCart();
 
 	/**
 	 * Reloads the cart page and checks whether the item is still present.
@@ -52,10 +59,10 @@ public interface BrowserPort {
 	 * Refreshes a cart reservation by removing the item and immediately re-adding it.
 	 * Mutating the basket resets Zalando's server-side reservation timer, which a
 	 * read-only presence check does not — this is what actually prolongs the hold during
-	 * keep-alive. The result distinguishes a sold-out article (the hold is genuinely
-	 * gone) from a bot-wall rejection (the hold may well still stand).
+	 * keep-alive. The result reports whether the removal actually happened, so the caller
+	 * can tell a lost hold from one that was never released.
 	 */
-	CartAddResult refreshCartItem(String productUrl, String size);
+	CartRefreshResult refreshCartItem(String productUrl, String size);
 
 	/** Verifies the session is still alive; re-authenticates if needed. */
 	void ensureAuthenticated();

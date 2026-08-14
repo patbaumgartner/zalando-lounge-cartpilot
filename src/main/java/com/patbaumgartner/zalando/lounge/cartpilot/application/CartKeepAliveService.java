@@ -29,10 +29,11 @@ import java.util.List;
  * Rules:
  * <ul>
  * <li>Only runs for reservations with status IN_CART.</li>
- * <li>If the item can no longer be re-added (e.g. sold out) → marks EXPIRED and posts a
- * link list so the group can still buy it by hand.</li>
- * <li>If the shop's bot protection refuses the refresh → keeps the reservation IN_CART
- * and reports it, since a block says nothing about availability.</li>
+ * <li>If the item left the basket and could not be put back → marks EXPIRED and posts a
+ * link list so the group can still buy it by hand. This holds even when the re-add was
+ * refused by bot protection: once the removal went through, the hold is gone.</li>
+ * <li>If the removal itself never went through → the original hold is untouched, so the
+ * reservation stays IN_CART and is retried next cycle.</li>
  * <li>Stops automatically when MAX_KEEP_ALIVE_HOURS has elapsed.</li>
  * </ul>
  */
@@ -111,20 +112,22 @@ public class CartKeepAliveService {
 			// first add.
 			var refresh = browser.refreshCartItem(product.productUrl(), reservation.size());
 
-			if (refresh.isAdded()) {
+			if (refresh.isRefreshed()) {
 				reservation.renewCartExpiry(expiryMinutes);
 				reservationPort.update(reservation);
 				log.debug("Refreshed cart hold for reservation {}", reservation.id());
 			}
-			else if (refresh.isBlocked()) {
-				// A bot-wall rejection says nothing about stock, so writing the
-				// reservation off as expired would throw away a hold that may well still
-				// stand. Keep it IN_CART, retry next cycle, and hand the group a link.
-				log.warn("Keep-alive blocked for reservation {} — {}", reservation.id(), refresh.describe());
+			else if (refresh.holdSurvived()) {
+				// The removal never went through, so the original hold is untouched and
+				// the reservation is still live. Retry on the next cycle.
+				log.warn("Keep-alive could not refresh reservation {} — {}", reservation.id(), refresh.describe());
 				collectLink(blocked, reservation, refresh.describe());
 			}
 			else {
-				log.info("Item {} could not be refreshed in cart (reservation {}): {}", product.name(),
+				// The article did leave the basket and could not be put back, so the
+				// hold is gone for good — even when the re-add was refused by the bot
+				// wall rather than by stock.
+				log.info("Item {} left the basket and could not be re-added (reservation {}): {}", product.name(),
 						reservation.id(), refresh.describe());
 				reservation.expire();
 				reservationPort.update(reservation);

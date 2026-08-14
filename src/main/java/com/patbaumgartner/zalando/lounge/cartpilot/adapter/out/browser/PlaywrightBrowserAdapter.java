@@ -12,6 +12,8 @@ import com.microsoft.playwright.options.WaitUntilState;
 import com.patbaumgartner.zalando.lounge.cartpilot.config.CartPilotProperties;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Campaign;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartAddResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartClearResult;
+import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.CartRefreshResult;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.DiscoveredProduct;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Gender;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.ProductDetails;
@@ -735,34 +737,40 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public synchronized void removeFromCart(String productUrl) {
+	public synchronized boolean removeFromCart(String productUrl) {
 		try {
 			String articleId = articleId(productUrl);
 			if (articleId == null || articleId.isBlank()) {
 				log.warn("Could not derive article id for cart removal: {}", productUrl);
-				return;
+				return false;
 			}
 
 			var snapshot = readCart();
 			if (!snapshot.readable()) {
 				log.warn("Cart could not be read (HTTP {}) — leaving {} untouched", snapshot.status(), productUrl);
-				return;
+				return false;
 			}
 
 			var page = apiPage();
-			boolean removed = false;
+			boolean anyRefused = false;
+			boolean anyMatched = false;
 			for (var cartItem : snapshot.items()) {
 				if (articleId.equals(cartItem.configSku())) {
-					removed |= cartApi.removeItem(page, cartItem);
+					anyMatched = true;
+					anyRefused |= !cartApi.removeItem(page, cartItem);
 				}
 			}
 
-			if (!removed) {
-				log.warn("No cart API item found for {}", productUrl);
+			if (!anyMatched) {
+				// Not in the basket is the state the caller asked for, not a failure.
+				log.debug("No cart API item found for {} — already absent", productUrl);
+				return true;
 			}
+			return !anyRefused;
 		}
 		catch (Exception e) {
 			log.error("removeFromCart failed for {}: {}", productUrl, e.getMessage(), e);
+			return false;
 		}
 	}
 
@@ -782,21 +790,22 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public synchronized CartAddResult refreshCartItem(String productUrl, String size) {
+	public synchronized CartRefreshResult refreshCartItem(String productUrl, String size) {
 		try {
 			// Removing and re-adding the article mutates the basket, which resets
 			// Zalando's server-side reservation timer — a plain presence check does not.
 			// This is what genuinely prolongs the cart hold during keep-alive.
-			removeFromCart(productUrl);
+			boolean removed = removeFromCart(productUrl);
 			var readded = addToCart(productUrl, size);
 			if (!readded.isAdded()) {
-				log.warn("Keep-alive refresh could not re-add {} (size {}): {}", productUrl, size, readded.describe());
+				log.warn("Keep-alive refresh could not re-add {} (size {}): {} (removal confirmed: {})", productUrl,
+						size, readded.describe(), removed);
 			}
-			return readded;
+			return new CartRefreshResult(removed, readded);
 		}
 		catch (Exception e) {
 			log.error("refreshCartItem failed for {}: {}", productUrl, e.getMessage(), e);
-			return CartAddResult.failed(0, e.getMessage());
+			return new CartRefreshResult(false, CartAddResult.failed(0, e.getMessage()));
 		}
 	}
 
@@ -823,28 +832,32 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	}
 
 	@Override
-	public synchronized int clearCart() {
+	public synchronized CartClearResult clearCart() {
 		try {
 			var snapshot = readCart();
 			if (!snapshot.readable()) {
 				log.warn("Cart could not be read (HTTP {}) — nothing was cleared", snapshot.status());
-				return 0;
+				return CartClearResult.unreadable();
 			}
 
 			var page = apiPage();
 			int removed = 0;
+			int failed = 0;
 			for (var cartItem : snapshot.items()) {
 				if (cartApi.removeItem(page, cartItem)) {
 					removed++;
 				}
+				else {
+					failed++;
+				}
 			}
 
-			log.info("Cleared {} item(s) from browser cart", removed);
-			return removed;
+			log.info("Cleared {} item(s) from browser cart ({} refused)", removed, failed);
+			return CartClearResult.of(removed, failed);
 		}
 		catch (Exception e) {
 			log.error("clearCart failed: {}", e.getMessage(), e);
-			return 0;
+			return CartClearResult.unreadable();
 		}
 	}
 

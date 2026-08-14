@@ -52,8 +52,10 @@ class PlaywrightBrowserAdapterE2ETest {
 			assertThat(server.cartCount()).isEqualTo(1);
 			assertThat(adapter.isItemInCart(server.productUrl())).isTrue();
 
-			int removed = adapter.clearCart();
-			assertThat(removed).isEqualTo(1);
+			var cleared = adapter.clearCart();
+			assertThat(cleared.cartReadable()).isTrue();
+			assertThat(cleared.removedCount()).isEqualTo(1);
+			assertThat(cleared.failedCount()).isZero();
 			assertThat(server.cartCount()).isZero();
 			assertThat(adapter.isItemInCart(server.productUrl())).isFalse();
 		}
@@ -98,7 +100,8 @@ class PlaywrightBrowserAdapterE2ETest {
 
 			var refreshed = adapter.refreshCartItem(server.productUrl(), "52");
 
-			assertThat(refreshed.isAdded()).isTrue();
+			assertThat(refreshed.isRefreshed()).isTrue();
+			assertThat(refreshed.removalConfirmed()).isTrue();
 			// The refresh issued exactly one DELETE and one re-add against the basket.
 			assertThat(server.removeCount()).isEqualTo(1);
 			assertThat(server.addCount()).isEqualTo(2);
