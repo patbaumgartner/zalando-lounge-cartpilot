@@ -29,7 +29,14 @@ services:
     volumes:
       - session_data:/workspace/session
     ports:
-      - "8080:8080"
+      # Loopback only: the actuator is unauthenticated and this app has no HTTP API.
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   patchright:
     build: ./patchright
@@ -37,8 +44,12 @@ services:
     restart: unless-stopped
     # Patched, undetected Chromium server. Exposes a deterministic Playwright
     # endpoint at ws://patchright:3000/cartpilot for the cartpilot service.
+    #
+    # Loopback only: this endpoint drives a real browser that holds the logged-in
+    # Zalando session, so anything that can reach it can act as the account. The
+    # cartpilot service reaches it over the compose network, not this mapping.
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
   postgres:
     image: postgres:16-alpine
