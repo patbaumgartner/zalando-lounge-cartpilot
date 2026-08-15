@@ -26,9 +26,13 @@ jobs:
   java:
     name: Java – Build & Test
     runs-on: ubuntu-latest
-    # Was 30: the suite now runs right up against that limit (30m12s observed),
-    # getting force-cancelled mid-report-generation despite every test passing.
-    timeout-minutes: 45
+    # A healthy run takes ~2 minutes (see e.g. run 31574715085, 2026-08-12). The
+    # 30/45-minute timeouts tried here earlier were masking, not fixing, a real
+    # hang after PlaywrightBrowserAdapterE2ETest — likely introduced by 279304b
+    # (dismissBlockingModalIfPresent) — that needs its own investigation. 10
+    # minutes gives real runs (plus Testcontainers/Docker pulls) headroom while
+    # failing a hang fast instead of burning 45 minutes on every occurrence.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
