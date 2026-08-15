@@ -81,7 +81,8 @@ class SchemaMigrationIntegrationTest extends PostgresContainerSupport {
 	}
 
 	private java.util.List<String> indexNames() {
-		return jdbcClient.sql("SELECT index_name FROM information_schema.indexes")
+		// information_schema has no view for indexes; PostgreSQL's own catalog does.
+		return jdbcClient.sql("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
 			.query(String.class)
 			.list()
 			.stream()
