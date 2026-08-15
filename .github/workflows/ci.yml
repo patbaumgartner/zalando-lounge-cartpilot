@@ -26,7 +26,9 @@ jobs:
   java:
     name: Java – Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Was 30: the suite now runs right up against that limit (30m12s observed),
+    # getting force-cancelled mid-report-generation despite every test passing.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
