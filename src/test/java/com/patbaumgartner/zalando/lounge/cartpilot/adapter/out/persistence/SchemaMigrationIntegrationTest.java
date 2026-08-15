@@ -1,5 +1,6 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.persistence;
 
+import com.patbaumgartner.zalando.lounge.cartpilot.PostgresContainerSupport;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.BrowserPort;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.port.out.NotificationPort;
 import org.junit.jupiter.api.DisplayName;
@@ -26,7 +27,7 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
 @SpringBootTest(webEnvironment = NONE)
 @ActiveProfiles("test")
 @DisplayName("Schema migrations (integration)")
-class SchemaMigrationIntegrationTest {
+class SchemaMigrationIntegrationTest extends PostgresContainerSupport {
 
 	@Autowired
 	private JdbcClient jdbcClient;

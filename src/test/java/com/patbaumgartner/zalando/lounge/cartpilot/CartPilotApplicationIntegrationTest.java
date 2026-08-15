@@ -6,13 +6,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.contains;
@@ -26,20 +21,8 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
  */
 @SpringBootTest(webEnvironment = NONE)
 @ActiveProfiles("test")
-@Testcontainers(disabledWithoutDocker = true)
 @DisplayName("CartPilot application context (integration)")
-class CartPilotApplicationIntegrationTest {
-
-	@Container
-	static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
-
-	@DynamicPropertySource
-	static void overrideDataSource(DynamicPropertyRegistry registry) {
-		registry.add("spring.datasource.url", postgres::getJdbcUrl);
-		registry.add("spring.datasource.username", postgres::getUsername);
-		registry.add("spring.datasource.password", postgres::getPassword);
-		registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
-	}
+class CartPilotApplicationIntegrationTest extends PostgresContainerSupport {
 
 	/**
 	 * Replace Playwright and Telegram adapters so no real browser or bot starts.

@@ -1,5 +1,6 @@
 package com.patbaumgartner.zalando.lounge.cartpilot.adapter.out.persistence;
 
+import com.patbaumgartner.zalando.lounge.cartpilot.PostgresContainerSupport;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.BrandTier;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Category;
 import com.patbaumgartner.zalando.lounge.cartpilot.domain.model.Gender;
@@ -25,7 +26,7 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
 @SpringBootTest(webEnvironment = NONE)
 @ActiveProfiles("test")
 @DisplayName("ProfilePersistenceAdapter (integration)")
-class ProfilePersistenceAdapterIntegrationTest {
+class ProfilePersistenceAdapterIntegrationTest extends PostgresContainerSupport {
 
 	@Autowired
 	private ProfilePort adapter;
