@@ -297,7 +297,6 @@ class PlaywrightBrowserAdapterE2ETest {
 							      ]}}};
 							      document.getElementById('add-to-cart').addEventListener('click', async () => {
 							        await fetch('/api/cart/add', { method: 'POST' });
-							        window.location.href = '/cart';
 							      });
 							    </script>
 							  </main>
