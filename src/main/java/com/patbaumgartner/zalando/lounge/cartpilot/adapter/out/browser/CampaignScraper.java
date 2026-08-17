@@ -234,8 +234,14 @@ class CampaignScraper {
 				// first page is worth logging so a genuinely empty result stays
 				// quiet.
 				if (pageNo == 0) {
-					log.warn("Articles API returned {} for campaign {} ({})", response.describe(), campaignId,
-							response.bodySnippet());
+					if (response.status() == 404 || response.status() == 410) {
+						log.info("Campaign {} closed before its articles could be scraped ({})", campaignId,
+								response.describe());
+					}
+					else {
+						log.warn("Articles API returned {} for campaign {} ({})", response.describe(), campaignId,
+								response.bodySnippet());
+					}
 				}
 				return List.of();
 			}
@@ -292,7 +298,8 @@ class CampaignScraper {
 		var originalPrice = CatalogArticleSupport.centsToAmount(article.path("price"));
 		var loungePrice = CatalogArticleSupport.centsToAmount(article.path("specialPrice"));
 		// A missing or unparseable price reads as CHF 0.00, which is under every
-		// configured cap — a tier-1 brand would then be auto-reserved on the strength of
+		// configured cap — a tier-1 brand would then be auto-reserved on the strength
+		// of
 		// a price the shop never quoted.
 		if (loungePrice.signum() <= 0) {
 			throw new IllegalArgumentException("article has no usable lounge price");

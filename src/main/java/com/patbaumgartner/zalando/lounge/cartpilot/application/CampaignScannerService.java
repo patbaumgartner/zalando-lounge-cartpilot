@@ -258,6 +258,7 @@ public class CampaignScannerService {
 		var unavailable = new ArrayList<NotificationPort.ProductLink>();
 		var failed = new ArrayList<NotificationPort.ProductLink>();
 		var notifyOnly = new ArrayList<NotificationPort.ProductLink>();
+		boolean cartBlockedForScan = false;
 
 		for (var profile : profiles) {
 			for (var result : filterService.filter(persisted, profile, purchasedByProfile.get(profile.id()))) {
@@ -271,6 +272,17 @@ public class CampaignScannerService {
 					continue;
 				}
 
+				if (cartBlockedForScan) {
+					log.atInfo()
+						.addArgument(() -> result.product().name())
+						.addArgument(() -> result.profile().name())
+						.log("NOTIFY_ONLY after cart bot protection: {} for {}");
+					cartService.reserveForNotification(result);
+					notifyOnly.add(NotificationPort.ProductLink.of(result, ReservationStatus.PENDING,
+							"cart blocked for this scan"));
+					continue;
+				}
+
 				log.atInfo()
 					.addArgument(() -> result.product().name())
 					.addArgument(() -> result.profile().name())
@@ -279,8 +291,11 @@ public class CampaignScannerService {
 				switch (addResult.outcome()) {
 					case ADDED ->
 						reserved.add(NotificationPort.ProductLink.of(result, ReservationStatus.IN_CART, "reserved"));
-					case BLOCKED -> blocked
-						.add(NotificationPort.ProductLink.of(result, ReservationStatus.BLOCKED, addResult.describe()));
+					case BLOCKED -> {
+						cartBlockedForScan = true;
+						blocked.add(NotificationPort.ProductLink.of(result, ReservationStatus.BLOCKED,
+								addResult.describe()));
+					}
 					case SIZE_UNAVAILABLE -> unavailable.add(NotificationPort.ProductLink.of(result,
 							ReservationStatus.OUT_OF_STOCK, addResult.detail()));
 					case FAILED -> failed
@@ -408,7 +423,9 @@ public class CampaignScannerService {
 		return Math.min(300_000L, exponential + jitter);
 	}
 
-	/** Sleeps, returning {@code false} when the thread was interrupted meanwhile. */
+	/**
+	 * Sleeps, returning {@code false} when the thread was interrupted meanwhile.
+	 */
 	private static boolean sleepQuietly(long millis) {
 		if (millis <= 0) {
 			return true;

@@ -229,6 +229,37 @@ class CampaignScannerServiceTest {
 		}
 
 		@Test
+		@DisplayName("falls back to notifications after the first cart bot block")
+		void fallsBackToNotificationsAfterBotBlock() {
+			var campaign = new Campaign("camp-001", "Summer Sale", LocalDate.now(), "https://example.com/c1");
+			var blockedProduct = ProductTestData.mammutJacket();
+			var fallbackProduct = ProductTestData.jackWolfskinFleece();
+			var profile = ProfileTestData.aProfile().withId(1L).build();
+			var blockedResult = new FilterResult(blockedProduct, profile, "52", Decision.AUTO_RESERVE, null, 90);
+			var fallbackResult = new FilterResult(fallbackProduct, profile, "L", Decision.AUTO_RESERVE, null, 80);
+
+			when(browser.fetchTodayCampaigns()).thenReturn(List.of(campaign));
+			when(browser.scrapeProducts(campaign)).thenReturn(List.of(blockedProduct, fallbackProduct));
+			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(blockedProduct, fallbackProduct));
+			when(profilePort.findAllActive()).thenReturn(List.of(profile));
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
+			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of(blockedResult, fallbackResult));
+			when(cartService.addToCart(blockedResult))
+				.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+
+			service.scan();
+
+			verify(cartService).addToCart(blockedResult);
+			verify(cartService, never()).addToCart(fallbackResult);
+			verify(cartService).reserveForNotification(fallbackResult);
+
+			var reportCaptor = ArgumentCaptor.forClass(NotificationPort.ScanReport.class);
+			verify(notification).sendScanReport(reportCaptor.capture());
+			assertThat(reportCaptor.getValue().blockedCount()).isEqualTo(1);
+			assertThat(reportCaptor.getValue().notifyCount()).isEqualTo(1);
+		}
+
+		@Test
 		@DisplayName("sends NOTIFY_ONLY results to reservation queue and posts their links")
 		void queuesNotifyOnlyResults() {
 			var campaign = new Campaign("camp-001", "Spring Sale", LocalDate.now(), "https://example.com/c1");
