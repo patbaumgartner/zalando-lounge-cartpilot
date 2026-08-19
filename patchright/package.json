@@ -9,6 +9,6 @@
     "install-browser": "patchright install chromium"
   },
   "dependencies": {
-    "patchright": "1.61.0"
+    "patchright": "1.62.1"
   }
 }

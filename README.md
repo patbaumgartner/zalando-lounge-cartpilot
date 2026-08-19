@@ -299,7 +299,7 @@ An article the profile has already bought is skipped on later scans. This is mat
 | Runtime | Java 25, virtual threads |
 | Framework | Spring Boot 4.1.0 |
 | Persistence | Spring Data JDBC + Flyway + PostgreSQL |
-| Browser automation | Playwright Java client 1.61.0 + Patchright Chromium sidecar |
+| Browser automation | Playwright Java client 1.62.0 + Patchright Chromium sidecar |
 | Telegram | TelegramBots 10.2.0 (long polling) |
 | Container image | Paketo Buildpack (`paketobuildpacks/builder-jammy-base`) |
 | Architecture tests | ArchUnit 1.5.0, Taikai 1.64.0 |
