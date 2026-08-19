@@ -76,6 +76,7 @@ cartpilot:
     expiry-minutes: 20
     keep-alive-interval-minutes: 15
     max-keep-alive-hours: ${MAX_KEEP_ALIVE_HOURS:2}
+    block-cooldown-ms: ${CART_BLOCK_COOLDOWN_MS:15000}
 
   scheduler:
     scan-cron: "0 0 6 * * *"

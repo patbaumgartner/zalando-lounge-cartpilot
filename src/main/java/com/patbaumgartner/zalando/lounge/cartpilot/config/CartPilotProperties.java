@@ -33,7 +33,12 @@ public record CartPilotProperties(ZalandoProperties zalando, TelegramProperties 
 	public record TelegramProperties(String botToken, String groupChatId) {
 	}
 
-	public record CartProperties(int expiryMinutes, int keepAliveIntervalMinutes, int maxKeepAliveHours) {
+	/**
+	 * @param blockCooldownMs pause after a bot-wall rejection before the scan attempts
+	 * the next basket call
+	 */
+	public record CartProperties(int expiryMinutes, int keepAliveIntervalMinutes, int maxKeepAliveHours,
+			long blockCooldownMs) {
 	}
 
 	public record SchedulerProperties(String scanCron, String summaryCron, String keepAliveCron, String timezone) {

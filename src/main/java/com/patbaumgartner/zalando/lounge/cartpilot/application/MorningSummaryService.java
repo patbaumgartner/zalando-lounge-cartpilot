@@ -18,10 +18,19 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
- * Sends the 06:10 morning summary (UC-04, always fired even on zero matches).
+ * Builds the daily digest (UC-04, always fired even on zero matches).
+ *
+ * <p>
+ * The digest is published by the scan itself once it has finished, because a scan runs
+ * for twenty minutes or more and a fixed clock trigger ten minutes after its start read
+ * the database before a single product or reservation had been written — reporting "no
+ * matching items today" on days with hundreds of matches.
+ * {@link #sendSummaryIfNotSentToday()} keeps the cron trigger as a fallback for the days
+ * no scan completes at all.
  */
 @Service
 public class MorningSummaryService {
@@ -36,12 +45,24 @@ public class MorningSummaryService {
 
 	private final NotificationPort notification;
 
+	private final AtomicReference<LocalDate> lastSentOn = new AtomicReference<>();
+
 	public MorningSummaryService(ProductReservationPort reservationPort, DiscoveredProductPort productPort,
 			ProfilePort profilePort, NotificationPort notification) {
 		this.reservationPort = reservationPort;
 		this.productPort = productPort;
 		this.profilePort = profilePort;
 		this.notification = notification;
+	}
+
+	/** Sends the digest unless a completed scan already published today's. */
+	public void sendSummaryIfNotSentToday() {
+		var today = LocalDate.now();
+		if (today.equals(lastSentOn.get())) {
+			log.info("Digest for {} was already sent by the scan — skipping the scheduled fallback", today);
+			return;
+		}
+		sendSummary();
 	}
 
 	public void sendSummary() {
@@ -67,6 +88,7 @@ public class MorningSummaryService {
 
 		notification.sendMorningSummary(new NotificationPort.MorningSummary(LocalDate.now(), autoReserved, blocked,
 				notifyItems, (int) uniqueCampaigns));
+		lastSentOn.set(LocalDate.now());
 	}
 
 	// ── Helpers ────────────────────────────────────────────────

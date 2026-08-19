@@ -137,7 +137,7 @@ class PlaywrightBrowserAdapterLiveTest {
 				BASE_URL + "/event", 1, 2, 30_000, 30_000, 3, true, false, 30_000, false, 8_000, 30_000, 30_000, 1_000,
 				0, true, "target/diagnostics", ws);
 		var telegram = new CartPilotProperties.TelegramProperties("unused", "unused");
-		var cart = new CartPilotProperties.CartProperties(20, 15, 2);
+		var cart = new CartPilotProperties.CartProperties(20, 15, 2, 0);
 		var scheduler = new CartPilotProperties.SchedulerProperties("0 0 6 * * *", "0 10 6 * * *", "0 */15 * * * *",
 				"Europe/Zurich");
 		return new CartPilotProperties(zalando, telegram, cart, scheduler);

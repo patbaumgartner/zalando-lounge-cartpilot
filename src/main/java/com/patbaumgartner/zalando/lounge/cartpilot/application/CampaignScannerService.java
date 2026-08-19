@@ -41,6 +41,15 @@ public class CampaignScannerService {
 
 	private static final Logger log = LoggerFactory.getLogger(CampaignScannerService.class);
 
+	/**
+	 * How many basket calls Akamai may refuse in a row before the scan gives up on
+	 * reserving anything else. A single {@code 403} is routine — the bot wall refuses
+	 * individual calls all the time and the very next article still goes through — so
+	 * stopping on the first one downgraded every remaining match of the day to
+	 * notify-only. Only an unbroken run of rejections means the wall is really up.
+	 */
+	private static final int MAX_CONSECUTIVE_CART_BLOCKS = 5;
+
 	private final BrowserPort browser;
 
 	private final ProfilePort profilePort;
@@ -61,12 +70,15 @@ public class CampaignScannerService {
 
 	private final BrowserGate browserGate;
 
+	private final MorningSummaryService summaryService;
+
 	private final AtomicBoolean scanInProgress = new AtomicBoolean(false);
 
 	public CampaignScannerService(BrowserPort browser, ProfilePort profilePort,
 			DiscoveredProductPort discoveredProductPort, KnownBrandPort knownBrandPort,
 			PurchasedItemPort purchasedItemPort, ProductFilter filterService, CartService cartService,
-			NotificationPort notification, CartPilotProperties properties, BrowserGate browserGate) {
+			NotificationPort notification, CartPilotProperties properties, BrowserGate browserGate,
+			MorningSummaryService summaryService) {
 		this.browser = browser;
 		this.profilePort = profilePort;
 		this.discoveredProductPort = discoveredProductPort;
@@ -77,6 +89,12 @@ public class CampaignScannerService {
 		this.notification = notification;
 		this.properties = properties;
 		this.browserGate = browserGate;
+		this.summaryService = summaryService;
+	}
+
+	/** True while a scan holds the browser, so clock-driven work can stand aside. */
+	public boolean isScanInProgress() {
+		return scanInProgress.get();
 	}
 
 	public void scan() {
@@ -174,6 +192,7 @@ public class CampaignScannerService {
 			log.info("Scan complete");
 			publishScanResults(new ScanContext(campaigns.size(), persisted.size(), candidates.size(), detailFetches,
 					profiles.size(), Duration.between(startedAt, Instant.now()), notes), outcome);
+			summaryService.sendSummary();
 		}
 		catch (Exception e) {
 			log.error("Scan failed", e);
@@ -259,6 +278,7 @@ public class CampaignScannerService {
 		var failed = new ArrayList<NotificationPort.ProductLink>();
 		var notifyOnly = new ArrayList<NotificationPort.ProductLink>();
 		boolean cartBlockedForScan = false;
+		int consecutiveBlocks = 0;
 
 		for (var profile : profiles) {
 			for (var result : filterService.filter(persisted, profile, purchasedByProfile.get(profile.id()))) {
@@ -289,17 +309,33 @@ public class CampaignScannerService {
 					.log("AUTO_RESERVE: {} for {}");
 				var addResult = cartService.addToCart(result);
 				switch (addResult.outcome()) {
-					case ADDED ->
+					case ADDED -> {
+						consecutiveBlocks = 0;
 						reserved.add(NotificationPort.ProductLink.of(result, ReservationStatus.IN_CART, "reserved"));
+					}
 					case BLOCKED -> {
-						cartBlockedForScan = true;
+						consecutiveBlocks++;
 						blocked.add(NotificationPort.ProductLink.of(result, ReservationStatus.BLOCKED,
 								addResult.describe()));
+						if (consecutiveBlocks >= MAX_CONSECUTIVE_CART_BLOCKS) {
+							cartBlockedForScan = true;
+							log.warn("Bot protection refused {} basket calls in a row — the rest of this scan is "
+									+ "notify-only", consecutiveBlocks);
+						}
+						else {
+							sleepQuietly(properties.cart().blockCooldownMs());
+						}
 					}
-					case SIZE_UNAVAILABLE -> unavailable.add(NotificationPort.ProductLink.of(result,
-							ReservationStatus.OUT_OF_STOCK, addResult.detail()));
-					case FAILED -> failed
-						.add(NotificationPort.ProductLink.of(result, ReservationStatus.FAILED, addResult.describe()));
+					case SIZE_UNAVAILABLE -> {
+						consecutiveBlocks = 0;
+						unavailable.add(NotificationPort.ProductLink.of(result, ReservationStatus.OUT_OF_STOCK,
+								addResult.detail()));
+					}
+					case FAILED -> {
+						consecutiveBlocks = 0;
+						failed.add(NotificationPort.ProductLink.of(result, ReservationStatus.FAILED,
+								addResult.describe()));
+					}
 				}
 			}
 		}

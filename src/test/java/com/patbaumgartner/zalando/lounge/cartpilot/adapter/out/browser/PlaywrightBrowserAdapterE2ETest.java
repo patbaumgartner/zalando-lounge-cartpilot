@@ -196,7 +196,7 @@ class PlaywrightBrowserAdapterE2ETest {
 				baseUrl, baseUrl + "/event", 1, 2, 30_000, 5_000, 1, true, false, 30_000, false, 5_000, 30_000, 30_000,
 				1_000, 0, false, tempDir.resolve("diagnostics").toString(), "");
 		var telegram = new CartPilotProperties.TelegramProperties("test-token", "-1001234567890");
-		var cart = new CartPilotProperties.CartProperties(20, 15, 2);
+		var cart = new CartPilotProperties.CartProperties(20, 15, 2, 0);
 		var scheduler = new CartPilotProperties.SchedulerProperties("0 0 6 * * *", "0 10 6 * * *", "0 */15 * * * *",
 				"Europe/Zurich");
 		return new CartPilotProperties(zalando, telegram, cart, scheduler);

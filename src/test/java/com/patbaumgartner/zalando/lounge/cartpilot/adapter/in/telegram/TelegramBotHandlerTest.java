@@ -101,7 +101,7 @@ class TelegramBotHandlerTest {
 				"ws://patchright:3000/cartpilot");
 		return new CartPilotProperties(zalando,
 				new CartPilotProperties.TelegramProperties("token", String.valueOf(GROUP_CHAT_ID)),
-				new CartPilotProperties.CartProperties(20, 15, 2), new CartPilotProperties.SchedulerProperties(
+				new CartPilotProperties.CartProperties(20, 15, 2, 0), new CartPilotProperties.SchedulerProperties(
 						"0 0 6 * * *", "0 10 6 * * *", "0 */15 * * * *", "Europe/Zurich"));
 	}
 

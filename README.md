@@ -22,7 +22,7 @@ No web UI. No admin panel. Everything controlled via Telegram.
 1. **06:00 CEST** — The scheduler scrapes active campaigns from Zalando Lounge CH by driving an undetected Chromium browser (**Patchright**) that runs as a separate service; the app connects to it over the Playwright wire protocol.
 2. Products are matched against each active profile's brand tiers, gender, sizes, and price caps.
 3. **Tier 1 brands** → item is added to cart automatically and a notification is posted to the group.
-4. **Tier 2 brands** → collected into a **06:10 morning summary** posted to the group.
+4. **Tier 2 brands** → collected into a **daily digest** posted to the group as soon as the scan finishes. A scan runs for twenty minutes or more, so the digest is published by the scan itself; the `summary-cron` trigger is only a fallback for days no scan completes.
 5. Every scan ends with a **scan report** (counts, timings, failures) plus a **link list per outcome** — reserved, blocked by bot protection, notify-only, and size-gone — so every matched product is one tap away.
 6. Group members tap **[🛍 Buy]** or **[❌ Skip]** inline buttons to act on notifications.
 7. Every 15 minutes the cart keep-alive scheduler removes and re-adds each reserved item, which resets Zalando's server-side reservation timer and prolongs the hold (default 20 min timeout, up to 2 h).
@@ -40,6 +40,8 @@ One browser serves four callers: the daily scan, the 15-minute keep-alive, manua
 ### Bot protection
 
 Zalando's basket endpoint sits behind Akamai BotManager. A refused cart add is reported as **blocked**, never as *sold out*: the reservation is kept as `BLOCKED` and the product stays on the link list for a manual grab.
+
+A single refusal is routine — the wall rejects individual basket calls and the very next article still goes through — so the scan pauses for `block-cooldown-ms` and carries on. Only five refusals in a row (with no successful add in between) stop it reserving for the rest of the scan; stopping on the first one downgraded every remaining match of the day to notify-only. A basket call that produces no response at all (an aborted fetch) is retried once, because an abort says nothing about whether the item was added.
 
 Keep-alive refreshes the hold by removing the item and re-adding it. If the removal itself was refused, the original hold is untouched and the reservation stays `IN_CART` for the next cycle. If the removal succeeded but the re-add failed — including when bot protection refused it — the hold is genuinely gone, so the reservation is marked `EXPIRED` and posted to the link list.
 
@@ -123,9 +125,10 @@ The application also reads standard Spring Boot configuration from `application.
 | `cartpilot.zalando.trust-session-file-in-dev` | `false` | In dev only, trust persisted session file when auth cookies exist |
 | `cartpilot.zalando.diagnostics-dir` | `diagnostics/auth` | Folder where login failure diagnostics are written |
 | `cartpilot.cart.expiry-minutes` | `20` | Cart item expiry window |
+| `cartpilot.cart.block-cooldown-ms` | `15000` | Pause after a bot-wall rejection before the scan attempts the next basket call |
 | `cartpilot.cart.keep-alive-interval-minutes` | `15` | Keep-alive check frequency |
 | `cartpilot.scheduler.scan-cron` | `0 0 6 * * *` | Daily scan trigger (Europe/Zurich) |
-| `cartpilot.scheduler.summary-cron` | `0 10 6 * * *` | Morning summary trigger |
+| `cartpilot.scheduler.summary-cron` | `0 10 6 * * *` | Digest fallback trigger — skipped when the scan is still running or already sent today's |
 
 ## Running Locally
 

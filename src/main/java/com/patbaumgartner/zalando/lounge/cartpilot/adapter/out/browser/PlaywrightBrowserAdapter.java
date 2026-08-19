@@ -67,6 +67,11 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	private static final int NO_WRITE_OBSERVED = -1;
 
 	/**
+	 * Pause before the single retry of a basket call that produced no response at all.
+	 */
+	private static final long BASKET_RETRY_DELAY_MS = 1_500;
+
+	/**
 	 * Accessible name of the article page's add-to-cart button (DE/EN). Deliberately
 	 * phrase-based: a bare "Warenkorb" also matches the header's basket button.
 	 */
@@ -504,6 +509,15 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 
 		log.info("Retrying the basket call in-page for {} (size {}): {}", productUrl, size, origin);
 		var response = cartApi.addItem(page, campaignId, configSku, simpleSku);
+		if (response.isTransportFailure()) {
+			// An aborted fetch says nothing about the basket — the request may never have
+			// left the page. Writing it off as FAILED lost articles that were still
+			// there.
+			log.info("In-page basket call for {} (size {}) produced no response ({}) — retrying once", productUrl, size,
+					response.describe());
+			sleepQuietly(BASKET_RETRY_DELAY_MS);
+			response = cartApi.addItem(page, campaignId, configSku, simpleSku);
+		}
 		if (!response.ok()) {
 			log.warn("In-page basket call for {} (size {}) answered {} ({})", productUrl, size, response.describe(),
 					response.bodySnippet());

@@ -67,6 +67,9 @@ class CampaignScannerServiceTest {
 	@Mock
 	private CartPilotProperties.ZalandoProperties zalandoProps;
 
+	@Mock
+	private MorningSummaryService summaryService;
+
 	private CampaignScannerService service;
 
 	@BeforeEach
@@ -74,9 +77,11 @@ class CampaignScannerServiceTest {
 		when(properties.zalando()).thenReturn(zalandoProps);
 		when(zalandoProps.retryMaxAttempts()).thenReturn(1);
 		when(zalandoProps.retryIntervalSeconds()).thenReturn(1);
+		when(properties.cart()).thenReturn(new CartPilotProperties.CartProperties(20, 15, 2, 0));
 
 		service = new CampaignScannerService(browser, profilePort, discoveredProductPort, knownBrandPort,
-				purchasedItemPort, productFilter, cartService, notification, properties, new BrowserGate());
+				purchasedItemPort, productFilter, cartService, notification, properties, new BrowserGate(),
+				summaryService);
 	}
 
 	@Nested
@@ -229,8 +234,8 @@ class CampaignScannerServiceTest {
 		}
 
 		@Test
-		@DisplayName("falls back to notifications after the first cart bot block")
-		void fallsBackToNotificationsAfterBotBlock() {
+		@DisplayName("keeps reserving after a single cart bot block")
+		void keepsReservingAfterSingleBotBlock() {
 			var campaign = new Campaign("camp-001", "Summer Sale", LocalDate.now(), "https://example.com/c1");
 			var blockedProduct = ProductTestData.mammutJacket();
 			var fallbackProduct = ProductTestData.jackWolfskinFleece();
@@ -246,16 +251,51 @@ class CampaignScannerServiceTest {
 			when(productFilter.filter(anyList(), any(), any())).thenReturn(List.of(blockedResult, fallbackResult));
 			when(cartService.addToCart(blockedResult))
 				.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+			when(cartService.addToCart(fallbackResult)).thenReturn(CartAddResult.added());
 
 			service.scan();
 
 			verify(cartService).addToCart(blockedResult);
+			verify(cartService).addToCart(fallbackResult);
+			verify(cartService, never()).reserveForNotification(fallbackResult);
+
+			var reportCaptor = ArgumentCaptor.forClass(NotificationPort.ScanReport.class);
+			verify(notification).sendScanReport(reportCaptor.capture());
+			assertThat(reportCaptor.getValue().blockedCount()).isEqualTo(1);
+			assertThat(reportCaptor.getValue().notifyCount()).isZero();
+		}
+
+		@Test
+		@DisplayName("stops reserving and falls back to notifications after a run of bot blocks")
+		void fallsBackToNotificationsAfterRepeatedBotBlocks() {
+			var campaign = new Campaign("camp-001", "Summer Sale", LocalDate.now(), "https://example.com/c1");
+			var blockedProduct = ProductTestData.mammutJacket();
+			var fallbackProduct = ProductTestData.jackWolfskinFleece();
+			var profile = ProfileTestData.aProfile().withId(1L).build();
+			var blockedResult = new FilterResult(blockedProduct, profile, "52", Decision.AUTO_RESERVE, null, 90);
+			var fallbackResult = new FilterResult(fallbackProduct, profile, "L", Decision.AUTO_RESERVE, null, 80);
+			var blockedResults = java.util.Collections.nCopies(5, blockedResult);
+			var allResults = new java.util.ArrayList<FilterResult>(blockedResults);
+			allResults.add(fallbackResult);
+
+			when(browser.fetchTodayCampaigns()).thenReturn(List.of(campaign));
+			when(browser.scrapeProducts(campaign)).thenReturn(List.of(blockedProduct, fallbackProduct));
+			when(discoveredProductPort.saveAll(anyList())).thenReturn(List.of(blockedProduct, fallbackProduct));
+			when(profilePort.findAllActive()).thenReturn(List.of(profile));
+			when(purchasedItemPort.findPurchasedArticleKeysByProfileId(1L)).thenReturn(Set.of());
+			when(productFilter.filter(anyList(), any(), any())).thenReturn(allResults);
+			when(cartService.addToCart(blockedResult))
+				.thenReturn(CartAddResult.blocked(403, "bot protection refused the basket call"));
+
+			service.scan();
+
+			verify(cartService, times(5)).addToCart(blockedResult);
 			verify(cartService, never()).addToCart(fallbackResult);
 			verify(cartService).reserveForNotification(fallbackResult);
 
 			var reportCaptor = ArgumentCaptor.forClass(NotificationPort.ScanReport.class);
 			verify(notification).sendScanReport(reportCaptor.capture());
-			assertThat(reportCaptor.getValue().blockedCount()).isEqualTo(1);
+			assertThat(reportCaptor.getValue().blockedCount()).isEqualTo(5);
 			assertThat(reportCaptor.getValue().notifyCount()).isEqualTo(1);
 		}
 
