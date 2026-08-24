@@ -21,7 +21,7 @@
     <archunit.version>1.5.0</archunit.version>
     <java.version>25</java.version>
     <playwright.version>1.62.0</playwright.version>
-    <spring-javaformat.version>0.0.47</spring-javaformat.version>
+    <spring-javaformat.version>0.0.48</spring-javaformat.version>
     <taikai.version>1.66.0</taikai.version>
     <telegrambots.version>10.2.0</telegrambots.version>
 
