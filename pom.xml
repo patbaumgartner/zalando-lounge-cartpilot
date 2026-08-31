@@ -23,7 +23,7 @@
     <playwright.version>1.62.0</playwright.version>
     <spring-javaformat.version>0.0.48</spring-javaformat.version>
     <taikai.version>1.66.0</taikai.version>
-    <telegrambots.version>10.2.0</telegrambots.version>
+    <telegrambots.version>10.2.1</telegrambots.version>
 
     <!-- Code Quality & Coverage Plugins -->
     <jacoco.version>0.8.15</jacoco.version>
