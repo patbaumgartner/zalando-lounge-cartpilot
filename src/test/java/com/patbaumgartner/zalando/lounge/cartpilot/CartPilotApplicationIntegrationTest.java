@@ -6,6 +6,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.annotation.DirtiesContext.ClassMode;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
@@ -21,6 +23,9 @@ import static org.springframework.boot.test.context.SpringBootTest.WebEnvironmen
  */
 @SpringBootTest(webEnvironment = NONE)
 @ActiveProfiles("test")
+// Force a fresh context so ApplicationReadyEvent fires for this class instead of
+// being replayed from a cached context created by an earlier test.
+@DirtiesContext(classMode = ClassMode.BEFORE_CLASS)
 @DisplayName("CartPilot application context (integration)")
 class CartPilotApplicationIntegrationTest extends PostgresContainerSupport {
 
