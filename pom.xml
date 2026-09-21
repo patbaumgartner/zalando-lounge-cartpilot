@@ -20,7 +20,7 @@
   <properties>
     <archunit.version>1.5.0</archunit.version>
     <java.version>25</java.version>
-    <playwright.version>1.62.0</playwright.version>
+    <playwright.version>1.63.0</playwright.version>
     <spring-javaformat.version>0.0.48</spring-javaformat.version>
     <taikai.version>1.67.0</taikai.version>
     <telegrambots.version>10.3.0</telegrambots.version>
