@@ -18,7 +18,7 @@
   <description>Headless Zalando Lounge CH monitor with Telegram group integration</description>
 
   <properties>
-    <archunit.version>1.5.0</archunit.version>
+    <archunit.version>1.5.1</archunit.version>
     <java.version>25</java.version>
     <playwright.version>1.63.0</playwright.version>
     <spring-javaformat.version>0.0.48</spring-javaformat.version>
