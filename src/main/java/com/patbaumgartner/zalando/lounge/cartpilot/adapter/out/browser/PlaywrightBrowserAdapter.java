@@ -30,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -143,6 +144,14 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 	private Page apiPage;
 
 	private boolean cookieConsentHandled;
+
+	/**
+	 * Whether the Akamai sensor on the shared API page has already been warmed for the
+	 * current document. The {@code _abck} cookie it mints lives in the browser context
+	 * and is shared by every page, so a single warm-up covers all basket calls; running
+	 * it once per add cost ~40 s per article and dominated the scan duration.
+	 */
+	private boolean apiPageSensorWarmed;
 
 	private long lastApiRequestAtNanos;
 
@@ -389,32 +398,102 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			log.warn("Could not derive campaign/article id for cart add: {}", productUrl);
 			return CartAddResult.failed(0, "unrecognised product URL");
 		}
+		CartAddResult result;
 		try {
-			return reserveOnArticlePage(productUrl, size, campaignId, configSku);
+			// Warm the shared context's Akamai sensor once, before any basket call. The
+			// _abck cookie it mints covers every page, so both the API-first path and the
+			// rendered-page fallback ride a solved sensor for the rest of the run.
+			ensureApiPageWarmed();
+			result = addViaCatalog(productUrl, size, campaignId, configSku)
+				.orElseGet(() -> reserveOnArticlePage(productUrl, size, campaignId, configSku));
 		}
 		catch (Exception e) {
-			log.error("addToCart failed for {}: {}", productUrl, e.getMessage(), e);
-			return CartAddResult.failed(0, e.getMessage());
+			log.error("addToCart failed for {}: {}", productUrl, concise(e));
+			return CartAddResult.failed(0, concise(e));
 		}
+		logResult(productUrl, size, result);
+		return result;
 	}
 
 	/**
-	 * Reserves the article by driving its detail page like a human: warm the Akamai
-	 * sensor, select the requested size, then click the page's own add-to-cart button so
-	 * the basket request is issued browser-natively by the SPA.
+	 * Reserves the article straight from the catalog state: the article JSON already
+	 * carries the per-size {@code simpleSku}, so the item can be written with a single
+	 * in-page {@code POST} and no article page render at all. This is what keeps a scan
+	 * from paying a full SPA navigation (and its 30 s timeouts) for every match.
 	 *
 	 * <p>
-	 * Nothing is looked up in the catalog API before the page is driven. That pre-check
-	 * ran over Playwright's Node HTTP stack and its {@code 403} aborted the whole add
-	 * without the article ever being opened — and the rendered page is the better source
-	 * anyway, because a size that cannot be picked there is genuinely gone.
+	 * Returns {@link Optional#empty()} only when the catalog route could not place the
+	 * call at all — the article lookup was refused or the basket write was rejected with
+	 * bot protection before it could mutate the basket. Both are safe to retry through
+	 * the rendered page. Every other outcome is final: once a basket write was accepted,
+	 * replaying it on the page would reserve the same article twice.
+	 */
+	private Optional<CartAddResult> addViaCatalog(String productUrl, String size, String campaignId, String configSku) {
+		var articleFetch = fetchArticleViaApiPage(productUrl);
+		if (articleFetch.article() == null) {
+			log.info("Catalog lookup for {} failed (HTTP {}) — reserving through the article page", productUrl,
+					articleFetch.status());
+			return Optional.empty();
+		}
+		String simpleSku = simpleSkuForSize(articleFetch.article().path("simples"), size);
+		if (simpleSku == null) {
+			return Optional.of(CartAddResult.sizeUnavailable("size " + size + " is not available for " + productUrl));
+		}
+
+		var page = apiPage();
+		var before = cartApi.read(page);
+		var response = cartApi.addItem(page, campaignId, configSku, simpleSku);
+		if (response.isTransportFailure()) {
+			// An aborted fetch says nothing about the basket — the request may never have
+			// left the page. Retry once before deciding.
+			log.info("Basket call for {} (size {}) produced no response ({}) — retrying once", productUrl, size,
+					response.describe());
+			sleepQuietly(BASKET_RETRY_DELAY_MS);
+			response = cartApi.addItem(page, campaignId, configSku, simpleSku);
+		}
+		if (response.isTransportFailure()) {
+			// Still nothing. The basket is the authority: if the item is there the write
+			// landed despite the missing response, otherwise this is a failure — never a
+			// page fallback, because a write that may have been accepted must not be
+			// replayed.
+			var confirmation = confirmInCart(page, configSku, before);
+			if (confirmation == CartConfirmation.CONFIRMED) {
+				return Optional.of(CartAddResult.added());
+			}
+			return Optional.of(CartAddResult.failed(0,
+					"the basket call produced no response and the cart does not hold the item"));
+		}
+		if (response.isBotWall() || response.isRateLimited()) {
+			// Refused before it could mutate the basket — safe to retry through the page.
+			log.info("Basket call for {} (size {}) was refused with {} — reserving through the article page",
+					productUrl, size, response.describe());
+			return Optional.empty();
+		}
+		if (!response.ok()) {
+			log.warn("Basket call for {} (size {}) answered {} ({})", productUrl, size, response.describe(),
+					response.bodySnippet());
+			return Optional.of(CartAddResult.failed(response.status(), "basket call answered " + response.describe()));
+		}
+
+		var confirmation = confirmInCart(page, configSku, before);
+		if (confirmation == CartConfirmation.ABSENT) {
+			return Optional
+				.of(CartAddResult.failed(response.status(), "basket accepted the item but the cart does not hold it"));
+		}
+		return Optional.of(CartAddResult.added());
+	}
+
+	/**
+	 * Fallback that reserves the article by driving its detail page like a human: select
+	 * the requested size, then click the page's own add-to-cart button so the basket
+	 * request is issued browser-natively by the SPA. Reached only when the catalog route
+	 * could not place the call (see {@link #addViaCatalog}).
 	 */
 	private CartAddResult reserveOnArticlePage(String productUrl, String size, String campaignId, String configSku) {
 		try (var page = openPage()) {
 			page.navigate(productUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 			page.waitForLoadState(LoadState.DOMCONTENTLOADED);
 			acceptCookieBannerOnce(page);
-			authService.warmUpBotSensor(page);
 
 			var before = cartApi.read(page);
 
@@ -436,19 +515,24 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				log.warn("No add-to-cart button found on {} — falling back to the in-page basket call", productUrl);
 			}
 
-			var result = confirmOrRetryInPage(page, productUrl, size, campaignId, configSku, before, basketWrite,
+			return confirmOrRetryInPage(page, productUrl, size, campaignId, configSku, before, basketWrite,
 					addButton != null);
-			log.atInfo()
-				.addArgument(productUrl)
-				.addArgument(size)
-				.addArgument(result::describe)
-				.log("addToCart result for {} (size {}): {}");
-			return result;
 		}
 		catch (Exception e) {
-			log.warn("Cart add on the article page failed for {} (size {}): {}", productUrl, size, e.getMessage());
-			return CartAddResult.failed(0, e.getMessage());
+			log.warn("Cart add on the article page failed for {} (size {}): {}", productUrl, size, concise(e));
+			return CartAddResult.failed(0, concise(e));
 		}
+	}
+
+	/**
+	 * Logs the outcome of an add exactly once, whichever route produced it.
+	 */
+	private static void logResult(String productUrl, String size, CartAddResult result) {
+		log.atInfo()
+			.addArgument(productUrl)
+			.addArgument(size)
+			.addArgument(result::describe)
+			.log("addToCart result for {} (size {}): {}");
 	}
 
 	/**
@@ -943,8 +1027,26 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				new Page.NavigateOptions().setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
 		page.waitForLoadState(LoadState.DOMCONTENTLOADED);
 		acceptCookieBannerOnce(page);
+		// A fresh document needs its own sensor warm-up; the previous page's is gone with
+		// its script.
+		apiPageSensorWarmed = false;
 		apiPage = page;
 		return apiPage;
+	}
+
+	/**
+	 * Warms the shared API page's Akamai sensor at most once per document. The
+	 * interaction is expensive (network-idle wait plus a ~7-12 s dwell), so it must not
+	 * run per add; the {@code _abck} cookie it mints lives in the browser context and is
+	 * therefore already valid for the article page the fallback drives.
+	 */
+	private void ensureApiPageWarmed() {
+		var page = apiPage();
+		if (apiPageSensorWarmed) {
+			return;
+		}
+		authService.warmUpBotSensor(page);
+		apiPageSensorWarmed = true;
 	}
 
 	private synchronized void closeApiPage() {
@@ -956,7 +1058,29 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				log.debug("Could not close the shared API page: {}", e.getMessage());
 			}
 			apiPage = null;
+			apiPageSensorWarmed = false;
 		}
+	}
+
+	/**
+	 * Collapses a driver error to a single short line. Playwright's messages carry a
+	 * multi-line call log plus the call arguments, which is unreadable inline in a log
+	 * line and, worse, in a chat message; only the first line and a bounded length are
+	 * kept.
+	 */
+	private static String concise(Throwable error) {
+		if (error == null) {
+			return "unknown error";
+		}
+		String message = error.getMessage();
+		if (message == null || message.isBlank()) {
+			return error.getClass().getSimpleName();
+		}
+		String firstLine = message.lines().findFirst().orElse("").strip();
+		if (firstLine.isBlank()) {
+			return error.getClass().getSimpleName();
+		}
+		return firstLine.length() <= 200 ? firstLine : firstLine.substring(0, 200) + "…";
 	}
 
 	/**
@@ -1086,7 +1210,13 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			options.setStorageStatePath(sessionPath);
 		}
 		cookieConsentHandled = false;
-		return browser.newContext(options);
+		BrowserContext created = browser.newContext(options);
+		// Playwright defaults every navigation to 30 s; a cold Zalando SPA render often
+		// needs longer, and the bare "Timeout 30000ms exceeded" aborted adds before the
+		// page could finish. The configured values were never applied to the context.
+		created.setDefaultNavigationTimeout(properties.zalando().navigationTimeoutMs());
+		created.setDefaultTimeout(properties.zalando().elementTimeoutMs());
+		return created;
 	}
 
 	/**
