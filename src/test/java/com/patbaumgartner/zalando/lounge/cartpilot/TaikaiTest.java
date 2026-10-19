@@ -1,5 +1,6 @@
 package com.patbaumgartner.zalando.lounge.cartpilot;
 
+import com.enofex.taikai.ClassCriteria;
 import com.enofex.taikai.Taikai;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,7 +24,8 @@ class TaikaiTest {
 				.methodsShouldNotDeclareGenericExceptions()
 				.utilityClassesShouldBeFinalAndHavePrivateConstructor()
 				.finalClassesShouldNotHaveProtectedMembers()
-				.imports(imports -> imports.shouldHaveNoCycles().shouldNotImport("java.util.logging.."))
+				.imports(imports -> imports.shouldHaveNoCycles()
+					.shouldNotImport(ClassCriteria.inPackage("..java.util.logging..")))
 				.naming(naming -> naming.classesShouldNotMatch(".*Impl")
 					.methodsShouldNotMatch("^(foo$|bar$).*")
 					.fieldsShouldNotMatch(".*(List|Set|Map)$")
@@ -32,7 +34,7 @@ class TaikaiTest {
 			.logging(logging -> logging.loggersShouldFollowConventions(Logger.class, "log", List.of(PRIVATE, FINAL)))
 			.test(test -> test.junit(junit -> junit.classesShouldNotBeAnnotatedWithDisabled()
 				.methodsShouldNotBeAnnotatedWithDisabled()
-				.classesShouldBePackagePrivate(".*Test")
+				.classesShouldBePackagePrivate(ClassCriteria.nameMatching(".*Test"))
 				.methodsShouldBePackagePrivate()
 				.methodsShouldBeAnnotatedWithDisplayName()))
 			.spring(spring -> spring.noAutowiredFields()
