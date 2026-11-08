@@ -39,10 +39,10 @@ updates:
 - package-ecosystem: github-actions
   groups:
     codeql-action:
-      patterns:
-      - github/codeql-action*
+      patterns: ["github/codeql-action*"]
     multi-step-actions:
       patterns:
+      - actions/cache/*
       - github/codeql-action/*
   directory: /
   schedule:
