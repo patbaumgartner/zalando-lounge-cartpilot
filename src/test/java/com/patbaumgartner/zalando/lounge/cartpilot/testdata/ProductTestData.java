@@ -21,6 +21,8 @@ public class ProductTestData {
 
 	private String brand = "Mammut";
 
+	private String color = "";
+
 	private String name = "Convey Tour 45";
 
 	private Category category = Category.JACKETS;
@@ -93,6 +95,11 @@ public class ProductTestData {
 		return this;
 	}
 
+	public ProductTestData withColor(String color) {
+		this.color = color;
+		return this;
+	}
+
 	public ProductTestData withName(String name) {
 		this.name = name;
 		return this;
@@ -134,8 +141,8 @@ public class ProductTestData {
 	}
 
 	public DiscoveredProduct build() {
-		return new DiscoveredProduct(id, campaignId, brand, name, category, gender, sizesAvailable, originalPrice,
-				loungePrice, discountPct, productUrl, status, discoveredAt);
+		return new DiscoveredProduct(id, campaignId, brand, color, name, category, gender, sizesAvailable,
+				originalPrice, loungePrice, discountPct, productUrl, status, discoveredAt);
 	}
 
 }

@@ -16,6 +16,8 @@ class DiscoveredProductJdbcEntity {
 
 	String brand;
 
+	String color;
+
 	String name;
 
 	String category;

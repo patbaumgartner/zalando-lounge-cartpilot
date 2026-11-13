@@ -31,6 +31,12 @@ public class Profile {
 
 	private final Map<String, String> brandAliases;
 
+	/**
+	 * Color names (substring, accent-folded, case-insensitive) whose products are skipped
+	 * for this profile.
+	 */
+	private final List<String> blockedColors;
+
 	private final BigDecimal maxPriceShoes;
 
 	private final BigDecimal maxPriceJackets;
@@ -39,7 +45,8 @@ public class Profile {
 
 	public Profile(Long id, String name, Gender gender, boolean active, Map<Category, String> sizes,
 			List<String> brandTier1, List<String> brandTier2, Map<String, String> brandAliases,
-			BigDecimal maxPriceShoes, BigDecimal maxPriceJackets, BigDecimal maxPriceClothing) {
+			List<String> blockedColors, BigDecimal maxPriceShoes, BigDecimal maxPriceJackets,
+			BigDecimal maxPriceClothing) {
 		this.id = id;
 		this.name = Objects.requireNonNull(name, "name must not be null");
 		this.gender = Objects.requireNonNull(gender, "gender must not be null");
@@ -48,6 +55,7 @@ public class Profile {
 		this.brandTier1 = List.copyOf(brandTier1);
 		this.brandTier2 = List.copyOf(brandTier2);
 		this.brandAliases = Map.copyOf(brandAliases);
+		this.blockedColors = List.copyOf(blockedColors);
 		this.maxPriceShoes = maxPriceShoes;
 		this.maxPriceJackets = maxPriceJackets;
 		this.maxPriceClothing = maxPriceClothing;
@@ -83,6 +91,30 @@ public class Profile {
 		return brandAliases.getOrDefault(rawBrand, rawBrand);
 	}
 
+	/**
+	 * Returns true when the product's color matches the profile's blocklist. Matching is
+	 * accent-folded and case-insensitive, and a blocklist entry matches as a substring of
+	 * the color name, so blocking {@code pink} also skips {@code neon pink}. A blank
+	 * product color (the catalog API does not always report one) is never blocked.
+	 */
+	public boolean isColorBlocked(String color) {
+		if (color == null || color.isBlank() || blockedColors.isEmpty()) {
+			return false;
+		}
+		String normalisedColor = normaliseColor(color);
+		return blockedColors.stream()
+			.map(Profile::normaliseColor)
+			.filter(entry -> !entry.isBlank())
+			.anyMatch(normalisedColor::contains);
+	}
+
+	private static String normaliseColor(String value) {
+		return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+			.replaceAll("\\p{M}+", "")
+			.toLowerCase(java.util.Locale.ROOT)
+			.trim();
+	}
+
 	public void activate() {
 		this.active = true;
 	}
@@ -95,18 +127,18 @@ public class Profile {
 		var updated = new EnumMap<Category, String>(Category.class);
 		updated.putAll(sizes);
 		updated.put(category, size);
-		return new Profile(id, name, gender, active, updated, brandTier1, brandTier2, brandAliases, maxPriceShoes,
-				maxPriceJackets, maxPriceClothing);
+		return new Profile(id, name, gender, active, updated, brandTier1, brandTier2, brandAliases, blockedColors,
+				maxPriceShoes, maxPriceJackets, maxPriceClothing);
 	}
 
 	public Profile withMaxPrice(Category category, BigDecimal price) {
 		return switch (category) {
-			case SHOES -> new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases, price,
-					maxPriceJackets, maxPriceClothing);
+			case SHOES -> new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases,
+					blockedColors, price, maxPriceJackets, maxPriceClothing);
 			case JACKETS -> new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases,
-					maxPriceShoes, price, maxPriceClothing);
-			default -> new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases, maxPriceShoes,
-					maxPriceJackets, price);
+					blockedColors, maxPriceShoes, price, maxPriceClothing);
+			default -> new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases, blockedColors,
+					maxPriceShoes, maxPriceJackets, price);
 		};
 	}
 
@@ -117,8 +149,8 @@ public class Profile {
 			case TIER_1 -> t1.add(brand);
 			case TIER_2 -> t2.add(brand);
 		}
-		return new Profile(id, name, gender, active, sizes, t1, t2, brandAliases, maxPriceShoes, maxPriceJackets,
-				maxPriceClothing);
+		return new Profile(id, name, gender, active, sizes, t1, t2, brandAliases, blockedColors, maxPriceShoes,
+				maxPriceJackets, maxPriceClothing);
 	}
 
 	public Profile withBrandRemoved(String brand) {
@@ -126,8 +158,22 @@ public class Profile {
 		var t2 = new ArrayList<>(brandTier2);
 		t1.remove(brand);
 		t2.remove(brand);
-		return new Profile(id, name, gender, active, sizes, t1, t2, brandAliases, maxPriceShoes, maxPriceJackets,
-				maxPriceClothing);
+		return new Profile(id, name, gender, active, sizes, t1, t2, brandAliases, blockedColors, maxPriceShoes,
+				maxPriceJackets, maxPriceClothing);
+	}
+
+	public Profile withBlockedColor(String color) {
+		var colors = new ArrayList<>(blockedColors);
+		colors.add(color);
+		return new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases, colors, maxPriceShoes,
+				maxPriceJackets, maxPriceClothing);
+	}
+
+	public Profile withBlockedColorRemoved(String color) {
+		var colors = new ArrayList<>(blockedColors);
+		colors.removeIf(c -> normaliseColor(c).equals(normaliseColor(color)));
+		return new Profile(id, name, gender, active, sizes, brandTier1, brandTier2, brandAliases, colors, maxPriceShoes,
+				maxPriceJackets, maxPriceClothing);
 	}
 
 	// ── Accessors ──────────────────────────────────────────────
@@ -162,6 +208,10 @@ public class Profile {
 
 	public Map<String, String> brandAliases() {
 		return brandAliases;
+	}
+
+	public List<String> blockedColors() {
+		return blockedColors;
 	}
 
 	public BigDecimal maxPriceShoes() {

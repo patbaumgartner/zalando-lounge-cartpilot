@@ -15,7 +15,8 @@ import java.util.Set;
  * Hard gates (any failure → silent skip for this profile): 1. Campaign gender matches
  * profile gender (or product is UNISEX). 2. Profile has a size for this category and that
  * size is available. 3. Lounge price is under the profile's cap for this category. 4.
- * Profile has not already purchased this product.
+ * Profile has not already purchased this product. 5. Product color is not on the
+ * profile's blocked-colors list.
  *
  * Brand matching (Levenshtein ≤ 2): No match → silent skip.
  */
@@ -84,6 +85,9 @@ public class ProductFilter {
 		if (purchasedArticleKeys.contains(product.articleKey())) {
 			return false;
 		}
+		if (profile.isColorBlocked(product.color())) {
+			return false;
+		}
 		return brandMatcher.findTier(product.brand(), profile).isPresent();
 	}
 
@@ -111,6 +115,11 @@ public class ProductFilter {
 
 		// Gate 4: not already purchased
 		if (purchasedArticleKeys.contains(product.articleKey())) {
+			return Optional.empty();
+		}
+
+		// Gate 5: color not on the profile's blocklist
+		if (profile.isColorBlocked(product.color())) {
 			return Optional.empty();
 		}
 

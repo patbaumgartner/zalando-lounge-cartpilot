@@ -37,7 +37,7 @@ public class TelegramMessageFormatter {
 	public String reservationNotification(ProductReservation reservation, Profile profile, DiscoveredProduct product) {
 		var expiresIn = reservation.cartExpiresAt() != null ? " (auto-renewed up to 2 h)" : "";
 
-		return """
+		var message = """
 				🛒 <b>Reserved for %s</b>
 
 				🏷 %s %s
@@ -48,6 +48,10 @@ public class TelegramMessageFormatter {
 					esc(titleCase(product.category().name())), esc(reservation.size()), product.loungePrice(),
 					product.originalPrice(), product.discountPct(), expiresIn)
 			.trim();
+		if (!product.color().isBlank()) {
+			message += "\n🎨 Color: " + esc(product.color());
+		}
+		return message;
 	}
 
 	public String morningSummary(NotificationPort.MorningSummary summary) {
@@ -226,8 +230,9 @@ public class TelegramMessageFormatter {
 
 	private String formatSummaryLine(FilterResult item) {
 		String tier = item.brandTier() != null ? " (Tier " + item.brandTier().name().replace("TIER_", "") + ")" : "";
-		return "%s | %s %s – CHF %s%s".formatted(esc(item.profile().name()), esc(item.product().brand()),
-				link(item.product().productUrl(), item.product().name()), item.product().loungePrice(), tier);
+		String color = item.product().color().isBlank() ? "" : " · 🎨 " + esc(item.product().color());
+		return "%s | %s %s – CHF %s%s%s".formatted(esc(item.profile().name()), esc(item.product().brand()),
+				link(item.product().productUrl(), item.product().name()), item.product().loungePrice(), tier, color);
 	}
 
 	/**

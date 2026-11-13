@@ -291,6 +291,7 @@ class CampaignScraper {
 
 	private DiscoveredProduct toDiscoveredProduct(JsonNode article, Campaign campaign, String origin) {
 		String brand = article.path("brand").asString("").trim();
+		String color = CatalogArticleSupport.resolveColor(article);
 		String name = firstNonBlank(article.path("nameCategoryTag").asString("").trim(),
 				article.path("nameShop").asString("").trim(), "Unknown");
 		var gender = CatalogArticleSupport.resolveGender(article.path("gender"));
@@ -308,7 +309,7 @@ class CampaignScraper {
 				: computeDiscount(originalPrice, loungePrice);
 		String productUrl = resolveProductUrl(article, origin, campaign);
 
-		return new DiscoveredProduct(null, campaign.campaignId(), brand.isBlank() ? "Unknown" : brand, name,
+		return new DiscoveredProduct(null, campaign.campaignId(), brand.isBlank() ? "Unknown" : brand, color, name,
 				inferCategory(name), gender, sizes, originalPrice, loungePrice, discountPct, productUrl,
 				ProductStatus.DISCOVERED, LocalDateTime.now());
 	}

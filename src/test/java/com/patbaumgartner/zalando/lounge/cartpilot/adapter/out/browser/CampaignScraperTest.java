@@ -26,11 +26,17 @@ class CampaignScraperTest {
 	}
 
 	private static String article(String sku, String brand, String name, Integer price, Integer specialPrice) {
+		return article(sku, brand, name, price, specialPrice, null);
+	}
+
+	private static String article(String sku, String brand, String name, Integer price, Integer specialPrice,
+			String color) {
 		return """
-				{"brand":"%s","nameCategoryTag":"%s","gender":["male"],
+				{"brand":"%s","nameCategoryTag":"%s","gender":["male"],%s
 				 "simples":[{"sku":"%s-52","stockStatus":"AVAILABLE","filterValue":"52"}],
 				 %s %s
-				 "urlPath":{"40":"/campaigns/camp-1/articles/%s"}}""".formatted(brand, name, sku,
+				 "urlPath":{"40":"/campaigns/camp-1/articles/%s"}}""".formatted(brand, name,
+				color == null ? "" : "\"color\":\"" + color + "\",", sku,
 				price == null ? "" : "\"price\":" + price + ",",
 				specialPrice == null ? "" : "\"specialPrice\":" + specialPrice + ",", sku);
 	}
@@ -57,6 +63,32 @@ class CampaignScraperTest {
 			assertThat(product.gender()).isEqualTo(Gender.MEN);
 			assertThat(product.sizesAvailable()).containsExactly("52");
 			assertThat(product.productUrl()).isEqualTo("https://www.zalando-lounge.ch/campaigns/camp-1/articles/SKU1");
+		}
+
+		@Test
+		@DisplayName("captures the article color from the catalog JSON")
+		void capturesColor() {
+			var http = new FakePageHttpClient()
+				.enqueueJson(200, "[" + article("SKU1", "Mammut", "Convey Jacke", 40000, 18000, "neon pink") + "]")
+				.fallingBackTo(new InPageResponse(200, "[]", ""));
+
+			var products = scraper(http).scrapeProducts(null, CAMPAIGN);
+
+			assertThat(products).hasSize(1);
+			assertThat(products.getFirst().color()).isEqualTo("neon pink");
+		}
+
+		@Test
+		@DisplayName("leaves the color blank when the catalog JSON has none")
+		void blankColorWhenMissing() {
+			var http = new FakePageHttpClient()
+				.enqueueJson(200, "[" + article("SKU1", "Mammut", "Convey Jacke", 40000, 18000) + "]")
+				.fallingBackTo(new InPageResponse(200, "[]", ""));
+
+			var products = scraper(http).scrapeProducts(null, CAMPAIGN);
+
+			assertThat(products).hasSize(1);
+			assertThat(products.getFirst().color()).isBlank();
 		}
 
 		@Test

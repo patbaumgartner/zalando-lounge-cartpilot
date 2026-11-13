@@ -83,6 +83,22 @@ final class CatalogArticleSupport {
 	}
 
 	/**
+	 * Resolves the article's color label from the catalog JSON. The listing uses
+	 * {@code color}; {@code colorName}/{@code colour} are accepted as fallbacks. A
+	 * missing field yields an empty string — an unknown color must never trip the
+	 * blocklist.
+	 */
+	static String resolveColor(JsonNode article) {
+		for (String field : new String[] { "color", "colorName", "colour" }) {
+			String value = article.path(field).asString("").trim();
+			if (!value.isBlank()) {
+				return value;
+			}
+		}
+		return "";
+	}
+
+	/**
 	 * Converts an integer-cents price node (e.g. {@code 3500}) to a currency amount
 	 * ({@code 35.00}). Missing or non-numeric nodes yield {@link BigDecimal#ZERO}.
 	 */

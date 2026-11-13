@@ -20,6 +20,12 @@ public class DiscoveredProduct {
 
 	private final String brand;
 
+	/**
+	 * Article color as reported by the catalog API (e.g. "schwarz", "neon pink"); blank
+	 * when unknown.
+	 */
+	private final String color;
+
 	private final String name;
 
 	private final Category category;
@@ -40,12 +46,13 @@ public class DiscoveredProduct {
 
 	private final LocalDateTime discoveredAt;
 
-	public DiscoveredProduct(Long id, String campaignId, String brand, String name, Category category, Gender gender,
-			List<String> sizesAvailable, BigDecimal originalPrice, BigDecimal loungePrice, int discountPct,
-			String productUrl, ProductStatus status, LocalDateTime discoveredAt) {
+	public DiscoveredProduct(Long id, String campaignId, String brand, String color, String name, Category category,
+			Gender gender, List<String> sizesAvailable, BigDecimal originalPrice, BigDecimal loungePrice,
+			int discountPct, String productUrl, ProductStatus status, LocalDateTime discoveredAt) {
 		this.id = id;
 		this.campaignId = Objects.requireNonNull(campaignId, "campaignId");
 		this.brand = Objects.requireNonNull(brand, "brand");
+		this.color = color == null ? "" : color.trim();
 		this.name = Objects.requireNonNull(name, "name");
 		this.category = Objects.requireNonNull(category, "category");
 		this.gender = Objects.requireNonNull(gender, "gender");
@@ -134,6 +141,10 @@ public class DiscoveredProduct {
 
 	public String brand() {
 		return brand;
+	}
+
+	public String color() {
+		return color;
 	}
 
 	public String name() {

@@ -33,6 +33,8 @@ public class ProfileTestData {
 
 	private final Map<String, String> brandAliases = new HashMap<>();
 
+	private final List<String> blockedColors = new ArrayList<>();
+
 	private BigDecimal maxPriceShoes = new BigDecimal("300");
 
 	private BigDecimal maxPriceJackets = new BigDecimal("500");
@@ -104,6 +106,11 @@ public class ProfileTestData {
 		return this;
 	}
 
+	public ProfileTestData withBlockedColor(String color) {
+		this.blockedColors.add(color);
+		return this;
+	}
+
 	public ProfileTestData withMaxPriceShoes(BigDecimal price) {
 		this.maxPriceShoes = price;
 		return this;
@@ -121,7 +128,8 @@ public class ProfileTestData {
 
 	public Profile build() {
 		return new Profile(id, name, gender, active, Map.copyOf(sizes), List.copyOf(brandTier1),
-				List.copyOf(brandTier2), Map.copyOf(brandAliases), maxPriceShoes, maxPriceJackets, maxPriceClothing);
+				List.copyOf(brandTier2), Map.copyOf(brandAliases), List.copyOf(blockedColors), maxPriceShoes,
+				maxPriceJackets, maxPriceClothing);
 	}
 
 }

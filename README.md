@@ -264,6 +264,7 @@ Profiles are stored in the database and represent the people shopping in the gro
 | `brand_tier_1` | Top-priority brands → auto-reserve |
 | `brand_tier_2` | Mid-priority brands → notify only |
 | `brand_aliases` | Local alias overrides per profile, e.g. `TNF=The North Face` |
+| `blocked_colors` | Comma-separated color names to skip for this profile (accent-folded, case-insensitive substring match, e.g. `neon,pink,lila` blocks "neon pink"); empty = block nothing |
 | `max_price_shoes` | CHF cap for shoes |
 | `max_price_jackets` | CHF cap for jackets / outerwear |
 | `max_price_clothing` | CHF cap for all other clothing |
@@ -279,6 +280,8 @@ Profiles are stored in the database and represent the people shopping in the gro
 | Discount 40–59 % | +10 |
 
 A Tier 1 match triggers **AUTO_RESERVE** (cart + immediate notification). A Tier 2 match triggers **NOTIFY_ONLY** (included in morning summary). No match → silently skipped.
+
+Products are also skipped when their color (as reported by the catalog API and shown as 🎨 in notifications) matches the profile's `blocked_colors` list — the "no weird colors" gate. A missing color never blocks.
 
 Brand matching tolerates spelling variants, but the fuzzy tolerance scales with name length: names under 5 characters must match exactly. A flat two-edit tolerance makes `Nike`/`Nine`, `Gap`/`Gas` and `Lowa`/`Lowe` equal, and on a Tier 1 list that silently reserves the wrong article. Longer names still absorb real typos (`Mamut` → `Mammut`), and the word-subset rule still matches `Levi` inside `Levi's` or `Salomon` inside `Salomon S-Lab`.
 

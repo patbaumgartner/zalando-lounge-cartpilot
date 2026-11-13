@@ -206,6 +206,30 @@ class ProductFilterServiceTest {
 		}
 
 		@Test
+		@DisplayName("Gate 5: skips when the product color is on the profile's blocklist")
+		void blockedColor() {
+			var profile = ProfileTestData.aProfile()
+				.withGender(Gender.MEN)
+				.withSize(Category.JACKETS, "52")
+				.withTier1Brand("Mammut")
+				.withBlockedColor("neon")
+				.build();
+
+			var ugly = ProductTestData.aProduct().withColor("neon pink").withSizesAvailable(List.of("52")).build();
+			var lovely = ProductTestData.aProduct()
+				.withId(2L)
+				.withColor("schwarz")
+				.withSizesAvailable(List.of("52"))
+				.build();
+
+			var results = filterService.filter(List.of(ugly, lovely), profile, Set.of());
+
+			assertThat(results).hasSize(1);
+			assertThat(results.getFirst().product().color()).isEqualTo("schwarz");
+			assertThat(filterService.prefilterCandidates(List.of(ugly), profile, Set.of())).isEmpty();
+		}
+
+		@Test
 		@DisplayName("skips when brand is not in any tier")
 		void noTierMatch() {
 			var profile = ProfileTestData.aProfile()

@@ -33,6 +33,8 @@ class ProfileJdbcEntity {
 
 	String brandAliases;
 
+	String blockedColors; // comma-separated
+
 	LocalDateTime createdAt;
 
 	@MappedCollection(idColumn = "profile_id")

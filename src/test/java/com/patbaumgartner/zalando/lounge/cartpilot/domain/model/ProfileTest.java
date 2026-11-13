@@ -37,8 +37,8 @@ class ProfileTest {
 		@Test
 		@DisplayName("a profile with no sizes at all can be constructed")
 		void supportsProfileWithoutAnySizes() {
-			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(), null,
-					null, null);
+			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(),
+					List.of(), null, null, null);
 
 			assertThat(profile.sizes()).isEmpty();
 			assertThat(profile.sizeFor(Category.SHOES)).isEmpty();
@@ -47,8 +47,8 @@ class ProfileTest {
 		@Test
 		@DisplayName("a first size can be added to a profile that had none")
 		void supportsAddingFirstSize() {
-			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(), null,
-					null, null);
+			var profile = new Profile(1L, "Sizeless", Gender.MEN, true, Map.of(), List.of(), List.of(), Map.of(),
+					List.of(), null, null, null);
 
 			assertThat(profile.withSize(Category.SHOES, "43").sizeFor(Category.SHOES)).contains("43");
 		}
@@ -103,6 +103,72 @@ class ProfileTest {
 			var profile = ProfileTestData.aProfile().build();
 
 			assertThat(profile.resolveAlias("Mammut")).isEqualTo("Mammut");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Color blocklist")
+	class ColorBlocklist {
+
+		@Test
+		@DisplayName("blocks a color that matches a blocklist entry exactly")
+		void blocksExactColor() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("pink").build();
+
+			assertThat(profile.isColorBlocked("pink")).isTrue();
+		}
+
+		@Test
+		@DisplayName("blocks a color containing a blocklist entry (neon pink vs pink)")
+		void blocksColorContainingEntry() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("pink").build();
+
+			assertThat(profile.isColorBlocked("neon pink")).isTrue();
+		}
+
+		@Test
+		@DisplayName("matching is case-insensitive and accent-folded")
+		void blocksCaseAndAccentInsensitive() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("Lila").build();
+
+			assertThat(profile.isColorBlocked("LILA")).isTrue();
+			assertThat(profile.isColorBlocked("lila")).isTrue();
+		}
+
+		@Test
+		@DisplayName("does not block unrelated colors")
+		void doesNotBlockOtherColors() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("pink").build();
+
+			assertThat(profile.isColorBlocked("schwarz")).isFalse();
+		}
+
+		@Test
+		@DisplayName("never blocks a blank or unknown color")
+		void neverBlocksUnknownColor() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("pink").build();
+
+			assertThat(profile.isColorBlocked("")).isFalse();
+			assertThat(profile.isColorBlocked(null)).isFalse();
+		}
+
+		@Test
+		@DisplayName("a profile without a blocklist blocks nothing")
+		void emptyBlocklistBlocksNothing() {
+			var profile = ProfileTestData.aProfile().build();
+
+			assertThat(profile.isColorBlocked("neon pink")).isFalse();
+		}
+
+		@Test
+		@DisplayName("withBlockedColorRemoved removes the entry case-insensitively")
+		void removesBlockedColor() {
+			var profile = ProfileTestData.aProfile().withBlockedColor("Pink").build();
+			var updated = profile.withBlockedColorRemoved("pInK");
+
+			assertThat(updated.isColorBlocked("neon pink")).isFalse();
+			assertThat(profile.isColorBlocked("neon pink")).isTrue();
 		}
 
 	}

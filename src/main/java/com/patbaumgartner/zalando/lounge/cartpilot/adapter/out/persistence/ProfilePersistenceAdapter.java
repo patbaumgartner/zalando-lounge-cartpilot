@@ -68,8 +68,8 @@ class ProfilePersistenceAdapter implements ProfilePort {
 			sizes.put(Category.fromString(sizeEntity.category), sizeEntity.size);
 		}
 		return new Profile(e.id, e.name, Gender.valueOf(e.gender), e.active, sizes, splitCsv(e.brandTier1),
-				splitCsv(e.brandTier2), parseBrandAliases(e.brandAliases), e.maxPriceShoes, e.maxPriceJackets,
-				e.maxPriceClothing);
+				splitCsv(e.brandTier2), parseBrandAliases(e.brandAliases), splitCsv(e.blockedColors), e.maxPriceShoes,
+				e.maxPriceJackets, e.maxPriceClothing);
 	}
 
 	private ProfileJdbcEntity toEntity(Profile p) {
@@ -84,6 +84,7 @@ class ProfilePersistenceAdapter implements ProfilePort {
 		entity.brandTier1 = String.join(",", p.brandTier1());
 		entity.brandTier2 = String.join(",", p.brandTier2());
 		entity.brandAliases = formatBrandAliases(p.brandAliases());
+		entity.blockedColors = p.blockedColors().isEmpty() ? null : String.join(",", p.blockedColors());
 
 		var sizeEntities = new LinkedHashSet<ProfileSizeJdbcEntity>();
 		p.sizes().forEach((cat, sz) -> {

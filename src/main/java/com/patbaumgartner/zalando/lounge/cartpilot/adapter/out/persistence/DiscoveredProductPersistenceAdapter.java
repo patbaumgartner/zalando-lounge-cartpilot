@@ -60,7 +60,7 @@ class DiscoveredProductPersistenceAdapter implements DiscoveredProductPort {
 	// ── Mapping ────────────────────────────────────────────────
 
 	private DiscoveredProduct toDomain(DiscoveredProductJdbcEntity e) {
-		return new DiscoveredProduct(e.id, e.campaignId, e.brand, e.name, Category.fromString(e.category),
+		return new DiscoveredProduct(e.id, e.campaignId, e.brand, e.color, e.name, Category.fromString(e.category),
 				Gender.valueOf(e.gender), splitCsv(e.sizesAvailable), e.originalPrice, e.loungePrice, e.discountPct,
 				e.productUrl, ProductStatus.valueOf(e.status), e.discoveredAt);
 	}
@@ -70,6 +70,7 @@ class DiscoveredProductPersistenceAdapter implements DiscoveredProductPort {
 		e.id = d.id();
 		e.campaignId = d.campaignId();
 		e.brand = d.brand();
+		e.color = d.color();
 		e.name = d.name();
 		e.category = d.category().name();
 		e.gender = d.gender().name();

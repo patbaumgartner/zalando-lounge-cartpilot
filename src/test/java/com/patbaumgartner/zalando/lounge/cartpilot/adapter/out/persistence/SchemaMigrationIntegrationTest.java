@@ -50,6 +50,27 @@ class SchemaMigrationIntegrationTest extends PostgresContainerSupport {
 	}
 
 	@Test
+	@DisplayName("V4 added the color and blocked_colors columns")
+	void createsColorColumns() {
+		var productColumns = columnNames("discovered_products");
+		var profileColumns = columnNames("profiles");
+
+		assertThat(productColumns).contains("color");
+		assertThat(profileColumns).contains("blocked_colors");
+	}
+
+	@Test
+	@DisplayName("V4 restricted Pat to the five Tier-1 brands with old Tier-1 leftovers in Tier 2")
+	void patBrandTiersRestricted() {
+		var tiers = jdbcClient.sql("SELECT brand_tier1, brand_tier2 FROM profiles WHERE name = 'Pat'")
+			.query((rs, rowNum) -> rs.getString(1) + "|" + rs.getString(2))
+			.single();
+
+		assertThat(tiers).isEqualTo(
+				"ECCO,Marc O'Polo,Haglöfs,Mammut,Geox" + "|TNF,Arc'teryx,Patagonia,Vaude,Scarpa,Dolomite,Patrick");
+	}
+
+	@Test
 	@DisplayName("a profile cannot record the same purchase twice")
 	void rejectsDuplicatePurchase() {
 		long profileId = jdbcClient.sql("SELECT id FROM profiles WHERE name = 'Pat'").query(Long.class).single();
@@ -78,6 +99,17 @@ class SchemaMigrationIntegrationTest extends PostgresContainerSupport {
 		jdbcClient.sql("INSERT INTO purchased_items (profile_id, product_id, purchased_by_username) VALUES (?, ?, ?)")
 			.params(profileId, productId, "pat")
 			.update();
+	}
+
+	private java.util.List<String> columnNames(String table) {
+		return jdbcClient
+			.sql("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?")
+			.param(table)
+			.query(String.class)
+			.list()
+			.stream()
+			.map(name -> name.toLowerCase(Locale.ROOT))
+			.toList();
 	}
 
 	private java.util.List<String> indexNames() {
