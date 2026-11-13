@@ -11,6 +11,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.jdbc.Sql;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.time.LocalDateTime;
@@ -61,6 +62,12 @@ class SchemaMigrationIntegrationTest extends PostgresContainerSupport {
 
 	@Test
 	@DisplayName("V4 restricted Pat to the five Tier-1 brands with old Tier-1 leftovers in Tier 2")
+	@Sql(statements = """
+			UPDATE profiles
+			SET brand_tier1 = 'ECCO,Marc O''Polo,Haglöfs,Mammut,Geox',
+			    brand_tier2 = 'TNF,Arc''teryx,Patagonia,Vaude,Scarpa,Dolomite,Patrick'
+			WHERE name = 'Pat'
+			""")
 	void patBrandTiersRestricted() {
 		var tiers = jdbcClient.sql("SELECT brand_tier1, brand_tier2 FROM profiles WHERE name = 'Pat'")
 			.query((rs, rowNum) -> rs.getString(1) + "|" + rs.getString(2))

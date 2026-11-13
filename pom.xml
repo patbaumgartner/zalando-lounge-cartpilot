@@ -325,16 +325,21 @@
             </configuration>
             <executions>
               <!--
-                Spring evaluates @ConditionalOnProperty at AOT (build) time. Provide a
-                dummy bot-token so the Telegram bot is retained in the native image, and
-                point the datasource at in-memory H2 with Flyway disabled so AOT
-                processing does not try to reach Postgres.
+                Spring evaluates @ConditionalOnProperty at AOT (build) time, so
+                Flyway must stay enabled here or the whole Flyway auto-configuration
+                (beans AND its db/migration/** resource hints) is pruned from the
+                native image and migrations never run at runtime. Point Flyway at
+                the intentionally empty classpath:db/migration-aot location instead,
+                so AOT processing sees no migrations and never touches a real DB.
+                Provide a dummy bot-token so the Telegram bot is retained, and point
+                the datasource at in-memory H2 so AOT processing does not try to
+                reach Postgres.
               -->
               <execution>
                 <id>process-aot</id>
                 <configuration>
                   <jvmArguments>-Dcartpilot.telegram.bot-token=aot-build
-                    -Dspring.flyway.enabled=false
+                    -Dspring.flyway.locations=classpath:db/migration-aot
                     -Dspring.datasource.url=jdbc:h2:mem:aot;DB_CLOSE_DELAY=-1
                     -Dspring.datasource.driver-class-name=org.h2.Driver
                     -Dspring.datasource.username=sa -Dspring.datasource.password=</jvmArguments>
