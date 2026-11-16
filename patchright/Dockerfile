@@ -9,7 +9,7 @@
 # container there is no real display, so we run headed under Xvfb (a virtual
 # framebuffer) via xvfb-run. This is the standard "undetected browser in Docker"
 # pattern.
-FROM mcr.microsoft.com/playwright:v1.62.1-jammy
+FROM mcr.microsoft.com/playwright:v1.65.1-resolute
 
 WORKDIR /app
 
