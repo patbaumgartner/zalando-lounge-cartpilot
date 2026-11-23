@@ -1,6 +1,6 @@
 package com.patbaumgartner.zalando.lounge.cartpilot;
 
-import com.enofex.taikai.ClassCriteria;
+import com.enofex.taikai.core.ClassCriteria;
 import com.enofex.taikai.Taikai;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
