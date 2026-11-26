@@ -27,6 +27,19 @@ No web UI. No admin panel. Everything controlled via Telegram.
 6. Group members tap **[🛍 Buy]** or **[❌ Skip]** inline buttons to act on notifications.
 7. Every 15 minutes the cart keep-alive scheduler removes and re-adds each reserved item, which resets Zalando's server-side reservation timer and prolongs the hold (default 20 min timeout, up to 2 h).
 
+### Browser version coupling
+
+The Java client and the Patchright sidecar speak a version-locked wire protocol: a
+`major.minor` mismatch is rejected with HTTP 428 before a page can be opened.
+`pom.xml`'s `<playwright.version>` and `patchright/package.json`'s `patchright` pin must
+therefore stay aligned; `PlaywrightVersionAlignmentTest` enforces this on every PR.
+
+Dependabot bumps Maven and npm independently. When only one side moves, leave that PR
+open until a matching release exists on the other side. Do **not** edit the Dependabot
+branch: Dependabot then stops updating it, and the manual commit breaks the signature
+check in the auto-merge workflow. Once both releases are published, update the lagging
+pin (and `patchright/package-lock.json`) in a normal PR, then rebase the Dependabot PR.
+
 ### Access control
 
 The bot only obeys the group named by `TELEGRAM_GROUP_CHAT_ID`. Every inbound message and button callback is matched against that chat id, and anything from another chat is ignored and logged. This matters because whoever adds a bot to a chat is that chat's *creator* — and therefore an "admin" by Telegram's own check — so without the binding a stranger could add the bot to their own group and drive `/scan`, `/clear` and `/profile` against your account. If the property is unset the bot answers nothing rather than failing open.
