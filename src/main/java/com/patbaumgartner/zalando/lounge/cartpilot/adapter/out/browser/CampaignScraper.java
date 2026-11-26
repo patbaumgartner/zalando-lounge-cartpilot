@@ -222,7 +222,7 @@ class CampaignScraper {
 	private List<JsonNode> fetchArticlePage(Page page, String origin, String campaignId, int pageNo) {
 		String apiUrl = origin + ARTICLES_API_PATH.formatted(campaignId) + "?size=" + ARTICLE_PAGE_SIZE
 				+ "&fields=1&sort=relevance&no_soldout=0&page=" + pageNo;
-		for (int attempt = 0; attempt <= ARTICLE_RATE_LIMIT_RETRIES; attempt++) {
+		for (int attempt = 0;; attempt++) {
 			paceArticleRequest();
 			var response = http.get(page, apiUrl);
 			if (response.isRateLimited()) {
@@ -264,7 +264,6 @@ class CampaignScraper {
 				return List.of();
 			}
 		}
-		return List.of();
 	}
 
 	private static void sleep(long millis) {
