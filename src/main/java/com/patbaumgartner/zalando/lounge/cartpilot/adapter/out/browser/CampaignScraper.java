@@ -225,7 +225,12 @@ class CampaignScraper {
 		for (int attempt = 0; attempt <= ARTICLE_RATE_LIMIT_RETRIES; attempt++) {
 			paceArticleRequest();
 			var response = http.get(page, apiUrl);
-			if (response.isRateLimited() && attempt < ARTICLE_RATE_LIMIT_RETRIES) {
+			if (response.isRateLimited()) {
+				if (attempt == ARTICLE_RATE_LIMIT_RETRIES) {
+					log.info("Articles API still rate-limited (429) after {} retries for campaign {}",
+							ARTICLE_RATE_LIMIT_RETRIES, campaignId);
+					return List.of();
+				}
 				sleep(ARTICLE_RETRY_BACKOFF_MS * (1L << attempt));
 				continue;
 			}

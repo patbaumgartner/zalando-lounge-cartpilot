@@ -292,7 +292,7 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 			return ArticleFetch.failed(0);
 		}
 		String apiUrl = origin(productUrl) + "/api/phoenix/catalog/events/" + campaignId + "/articles/" + sku;
-		for (int attempt = 0; attempt <= SIZE_API_RATE_LIMIT_RETRIES; attempt++) {
+		for (int attempt = 0;; attempt++) {
 			paceApiRequest();
 			var response = http.get(page, apiUrl);
 
@@ -326,7 +326,6 @@ public class PlaywrightBrowserAdapter implements BrowserPort {
 				return ArticleFetch.failed(response.status());
 			}
 		}
-		return ArticleFetch.failed(0);
 	}
 
 	/**
